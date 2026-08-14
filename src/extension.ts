@@ -1,0 +1,36 @@
+export type ExtensionManifestOptions = {
+  allowedOrigins: readonly string[];
+  name?: string;
+  version?: string;
+  description?: string;
+};
+
+/**
+ * Creates the secure Manifest V3 configuration required by the bundled extension.
+ * The origins must be exact Chrome match patterns, for example "https://app.example.com/*".
+ */
+export function createRealBrowserExtensionManifest(options: ExtensionManifestOptions) {
+  if (!Array.isArray(options.allowedOrigins) || options.allowedOrigins.length === 0) {
+    throw new TypeError("At least one allowed origin is required.");
+  }
+  for (const pattern of options.allowedOrigins) {
+    if (typeof pattern !== "string" || !/^(https?|file):\/\//.test(pattern)) {
+      throw new TypeError("allowedOrigins must contain Chrome match patterns.");
+    }
+  }
+  return {
+    manifest_version: 3,
+    name: options.name ?? "Real Browser Web Bridge",
+    version: options.version ?? "1.0.0",
+    description: options.description ?? "Lets approved web apps open and manage the user's real Chrome tabs.",
+    permissions: ["tabs"],
+    background: { service_worker: "service-worker.js", type: "module" },
+    content_scripts: [{
+      matches: [...options.allowedOrigins],
+      js: ["bridge.js"],
+      run_at: "document_start",
+    }],
+    externally_connectable: { matches: [...options.allowedOrigins] },
+    action: { default_title: options.name ?? "Real Browser Web Bridge" },
+  } as const;
+}

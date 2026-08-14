@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Real Browser Web Bridge",
+  "version": "1.0.0",
+  "description": "Lets approved web apps open and manage the user's real Chrome tabs.",
+  "permissions": ["tabs"],
+  "background": { "service_worker": "service-worker.js", "type": "module" },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost/*", "https://*.example.com/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "externally_connectable": {
+    "matches": ["http://localhost/*", "https://*.example.com/*"]
+  },
+  "action": { "default_title": "Real Browser Web Bridge" }
+}

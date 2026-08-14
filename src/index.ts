@@ -1,244 +1,124 @@
-export type InputEvent =
-  | { type: 'mouse'; action: 'move' | 'down' | 'up' | 'click'; x: number; y: number; button?: 'left' | 'middle' | 'right' }
-  | { type: 'wheel'; x: number; y: number; deltaX: number; deltaY: number }
-  | { type: 'keyboard'; action: 'down' | 'up'; key: string };
+import {
+  BRIDGE_CHANNEL,
+  BRIDGE_VERSION,
+  BrowserEvent,
+  BrowserTab,
+  BridgeCommand,
+  BridgeResponse,
+  ExtensionStatus,
+  TabAction,
+  isBridgeEvent,
+  isBridgeResponse,
+  normalizeTabUrl,
+} from "./protocol";
 
-export interface ChromiumViewerOptions {
-  /** Base URL of the Chromium control server, for example http://localhost:8787. */
-  endpoint: string;
-  /** Optional bearer token sent with every request. */
-  token?: string;
-  /** Refresh interval for screenshots in milliseconds. Set to 0 to disable polling. */
-  refreshInterval?: number;
-  /** Automatically focus the viewer when it is mounted. */
-  autoFocus?: boolean;
-}
+export {
+  BRIDGE_CHANNEL,
+  BRIDGE_VERSION,
+  normalizeTabUrl,
+  type BrowserEvent,
+  type BrowserTab,
+  type ExtensionStatus,
+  type TabAction,
+} from "./protocol";
 
-export interface NavigateOptions {
-  waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' | 'commit';
-  timeout?: number;
-}
+export type RealBrowserClientOptions = {
+  /** Origin used for the local postMessage bridge. Defaults to the current page origin. */
+  targetOrigin?: string;
+  /** Maximum time to wait for a response from the installed extension. */
+  timeoutMs?: number;
+};
 
-export interface EvaluateOptions {
-  expression: string;
-  awaitPromise?: boolean;
-  returnByValue?: boolean;
-}
+export type OpenTabOptions = { active?: boolean; pinned?: boolean; index?: number };
+export type TabListener = (event: BrowserEvent) => void;
 
-export interface ChromiumViewerEvents {
-  onError?: (error: Error) => void;
-  onScreenshot?: (image: Blob) => void;
-}
-
-function normalizeEndpoint(endpoint: string): string {
-  const normalized = endpoint.trim().replace(/\/$/, '');
-  if (!/^https?:\/\//i.test(normalized)) {
-    throw new TypeError('endpoint must be an absolute http:// or https:// URL');
-  }
-  return normalized;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.max(minimum, Math.min(maximum, value));
-}
+type PendingRequest = { resolve: (value: unknown) => void; reject: (reason: Error) => void; timer: number };
 
 /**
- * A lightweight browser-side viewer for a remote Chromium page.
- * The server returns JPEG screenshots and accepts input events over HTTP.
+ * A client for the bundled Manifest V3 extension. It controls the user's real Chrome tabs;
+ * it never streams, screenshots, embeds, or executes JavaScript inside remote pages.
  */
-export class ChromiumViewer {
-  readonly element: HTMLDivElement;
-  private readonly image: HTMLImageElement;
-  private readonly endpoint: string;
-  private readonly token?: string;
-  private readonly refreshInterval: number;
-  private readonly events: ChromiumViewerEvents;
-  private timer?: number;
-  private objectUrl?: string;
-  private running = false;
+export class RealBrowserClient {
+  private readonly targetOrigin: string;
+  private readonly timeoutMs: number;
+  private readonly pending = new Map<string, PendingRequest>();
+  private readonly listeners = new Set<TabListener>();
+  private disposed = false;
 
-  constructor(options: ChromiumViewerOptions, events: ChromiumViewerEvents = {}) {
-    this.endpoint = normalizeEndpoint(options.endpoint);
-    this.token = options.token;
-    this.refreshInterval = options.refreshInterval ?? 250;
-    this.events = events;
-
-    this.element = document.createElement('div');
-    this.element.className = 'chromium-web-embed-viewer';
-    this.element.tabIndex = 0;
-    this.element.style.position = 'relative';
-    this.element.style.overflow = 'hidden';
-    this.element.style.background = '#111';
-    this.element.setAttribute('aria-label', 'Embedded Chromium browser');
-
-    this.image = document.createElement('img');
-    this.image.alt = 'Embedded Chromium browser';
-    this.image.draggable = false;
-    this.image.style.display = 'block';
-    this.image.style.width = '100%';
-    this.image.style.height = '100%';
-    this.image.style.objectFit = 'contain';
-    this.image.style.userSelect = 'none';
-    this.image.style.pointerEvents = 'none';
-    this.element.appendChild(this.image);
-
-    this.bindInputEvents();
-    if (options.autoFocus) this.element.focus();
+  constructor(options: RealBrowserClientOptions = {}) {
+    if (typeof window === "undefined") throw new Error("RealBrowserClient must run in a browser window.");
+    this.targetOrigin = options.targetOrigin ?? window.location.origin;
+    this.timeoutMs = options.timeoutMs ?? 1_500;
+    window.addEventListener("message", this.receive);
   }
 
-  mount(container: HTMLElement): this {
-    container.appendChild(this.element);
-    return this;
+  async connect(): Promise<ExtensionStatus> {
+    const status = await this.status();
+    await this.request("subscribe");
+    return status;
   }
 
-  async start(): Promise<void> {
-    if (this.running) return;
-    this.running = true;
-    await this.refresh();
-    if (this.refreshInterval > 0) {
-      this.timer = window.setInterval(() => void this.refresh(), this.refreshInterval);
+  status(): Promise<ExtensionStatus> { return this.request("status"); }
+  open(url: string, options: OpenTabOptions = {}): Promise<{ tab: BrowserTab }> { return this.request("open", { url: normalizeTabUrl(url), ...options }); }
+  list(currentWindow = true): Promise<{ tabs: BrowserTab[] }> { return this.request("list", { currentWindow }); }
+  active(): Promise<{ tab: BrowserTab | null }> { return this.request("active"); }
+  navigate(tabId: number, url: string): Promise<{ tab: BrowserTab }> { return this.request("navigate", { tabId, url: normalizeTabUrl(url) }); }
+  activate(tabId: number): Promise<{ tab: BrowserTab }> { return this.request("activate", { tabId }); }
+  reload(tabId: number): Promise<{ ok: true }> { return this.request("reload", { tabId }); }
+  back(tabId: number): Promise<{ ok: true }> { return this.request("back", { tabId }); }
+  forward(tabId: number): Promise<{ ok: true }> { return this.request("forward", { tabId }); }
+  close(tabId: number): Promise<{ ok: true }> { return this.request("close", { tabId }); }
+  pin(tabId: number, pinned = true): Promise<{ tab: BrowserTab }> { return this.request("pin", { tabId, pinned }); }
+  mute(tabId: number, muted = true): Promise<{ tab: BrowserTab }> { return this.request("mute", { tabId, muted }); }
+
+  onTabEvent(listener: TabListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    window.removeEventListener("message", this.receive);
+    for (const [requestId, pending] of this.pending) {
+      window.clearTimeout(pending.timer);
+      pending.reject(new Error("The real browser client was disposed."));
+      this.pending.delete(requestId);
     }
+    this.listeners.clear();
   }
 
-  stop(): void {
-    this.running = false;
-    if (this.timer !== undefined) window.clearInterval(this.timer);
-    this.timer = undefined;
-    this.releaseObjectUrl();
+  private request<T>(action: TabAction, data?: Record<string, unknown>): Promise<T> {
+    if (this.disposed) return Promise.reject(new Error("The real browser client was disposed."));
+    const requestId = typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    const command: BridgeCommand = { channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "command", requestId, action, ...(data ? { data } : {}) };
+    return new Promise<T>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        this.pending.delete(requestId);
+        reject(new Error("The real browser extension did not respond. Check that it is installed and that this origin is allowed."));
+      }, this.timeoutMs);
+      this.pending.set(requestId, { resolve: resolve as (value: unknown) => void, reject, timer });
+      window.postMessage(command, this.targetOrigin);
+    });
   }
 
-  async refresh(): Promise<void> {
-    try {
-      const response = await this.request('/screenshot');
-      if (!response.ok) throw await this.responseError(response);
-      const blob = await response.blob();
-      this.releaseObjectUrl();
-      this.objectUrl = URL.createObjectURL(blob);
-      this.image.src = this.objectUrl;
-      this.events.onScreenshot?.(blob);
-    } catch (error) {
-      this.reportError(error);
+  private receive = (event: MessageEvent<unknown>) => {
+    if (event.origin !== this.targetOrigin) return;
+    const message = event.data;
+    if (isBridgeEvent(message)) {
+      this.listeners.forEach((listener) => listener(message.event));
+      return;
     }
-  }
-
-  async navigate(url: string, options: NavigateOptions = {}): Promise<{ url: string }> {
-    if (!url.trim()) throw new TypeError('url must not be empty');
-    const response = await this.request('/navigate', {
-      method: 'POST',
-      body: JSON.stringify({ url, ...options })
-    });
-    if (!response.ok) throw await this.responseError(response);
-    return response.json() as Promise<{ url: string }>;
-  }
-
-  async evaluate<T = unknown>(options: EvaluateOptions): Promise<T> {
-    if (!options.expression.trim()) throw new TypeError('expression must not be empty');
-    const response = await this.request('/evaluate', {
-      method: 'POST',
-      body: JSON.stringify(options)
-    });
-    if (!response.ok) throw await this.responseError(response);
-    const payload = (await response.json()) as { value: T };
-    return payload.value;
-  }
-
-  async sendInput(event: InputEvent): Promise<void> {
-    const response = await this.request('/input', {
-      method: 'POST',
-      body: JSON.stringify(event)
-    });
-    if (!response.ok) throw await this.responseError(response);
-  }
-
-  private bindInputEvents(): void {
-    this.element.addEventListener('pointermove', (event) => {
-      void this.sendInput(this.pointerEvent('move', event)).catch((error) => this.reportError(error));
-    });
-    this.element.addEventListener('pointerdown', (event) => {
-      this.element.focus();
-      void this.sendInput(this.pointerEvent('down', event)).catch((error) => this.reportError(error));
-    });
-    this.element.addEventListener('pointerup', (event) => {
-      void this.sendInput(this.pointerEvent('up', event)).catch((error) => this.reportError(error));
-    });
-    this.element.addEventListener('wheel', (event) => {
-      event.preventDefault();
-      const point = this.pointFromEvent(event);
-      void this.sendInput({
-        type: 'wheel',
-        ...point,
-        deltaX: event.deltaX,
-        deltaY: event.deltaY
-      }).catch((error) => this.reportError(error));
-    }, { passive: false });
-    this.element.addEventListener('keydown', (event) => {
-      event.preventDefault();
-      void this.sendInput({ type: 'keyboard', action: 'down', key: event.key }).catch((error) => this.reportError(error));
-    });
-    this.element.addEventListener('keyup', (event) => {
-      event.preventDefault();
-      void this.sendInput({ type: 'keyboard', action: 'up', key: event.key }).catch((error) => this.reportError(error));
-    });
-  }
-
-  private pointerEvent(action: 'move' | 'down' | 'up' | 'click', event: PointerEvent | MouseEvent): InputEvent {
-    return {
-      type: 'mouse',
-      action,
-      ...this.pointFromEvent(event),
-      button: event.button === 1 ? 'middle' : event.button === 2 ? 'right' : 'left'
-    };
-  }
-
-  private pointFromEvent(event: MouseEvent): { x: number; y: number } {
-    const rect = this.element.getBoundingClientRect();
-    const naturalWidth = this.image.naturalWidth || rect.width;
-    const naturalHeight = this.image.naturalHeight || rect.height;
-    return {
-      x: clamp(((event.clientX - rect.left) / Math.max(rect.width, 1)) * naturalWidth, 0, naturalWidth),
-      y: clamp(((event.clientY - rect.top) / Math.max(rect.height, 1)) * naturalHeight, 0, naturalHeight)
-    };
-  }
-
-  private async request(path: string, init: RequestInit = {}): Promise<Response> {
-    const headers = new Headers(init.headers);
-    headers.set('Accept', 'application/json');
-    if (init.body) headers.set('Content-Type', 'application/json');
-    if (this.token) headers.set('Authorization', `Bearer ${this.token}`);
-    return fetch(`${this.endpoint}${path}`, { ...init, headers });
-  }
-
-  private async responseError(response: Response): Promise<Error> {
-    let message = `${response.status} ${response.statusText}`;
-    try {
-      const body = (await response.json()) as { error?: string };
-      if (body.error) message = body.error;
-    } catch {
-      // Keep the HTTP status when the response is not JSON.
-    }
-    return new Error(message);
-  }
-
-  private reportError(error: unknown): void {
-    const normalized = error instanceof Error ? error : new Error(String(error));
-    this.events.onError?.(normalized);
-  }
-
-  private releaseObjectUrl(): void {
-    if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
-    this.objectUrl = undefined;
-  }
+    if (!isBridgeResponse(message)) return;
+    const pending = this.pending.get(message.requestId);
+    if (!pending) return;
+    this.pending.delete(message.requestId);
+    window.clearTimeout(pending.timer);
+    if (message.ok) pending.resolve(message.result);
+    else pending.reject(new Error(message.error ?? "The extension rejected the command."));
+  };
 }
 
-export function createChromiumViewer(
-  container: HTMLElement,
-  options: ChromiumViewerOptions,
-  events: ChromiumViewerEvents = {}
-): ChromiumViewer {
-  const viewer = new ChromiumViewer(options, events);
-  viewer.mount(container);
-  return viewer;
+export function createRealBrowserClient(options: RealBrowserClientOptions = {}): RealBrowserClient {
+  return new RealBrowserClient(options);
 }
-
-export { normalizeEndpoint };
-

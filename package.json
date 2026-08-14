@@ -1,7 +1,7 @@
 {
   "name": "chromium-web-embed",
-  "version": "0.1.0",
-  "description": "Embed and control a remote Chromium session from a web application.",
+  "version": "1.0.0",
+  "description": "Connect approved web apps to a real Chrome extension for local tab control.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -9,6 +9,7 @@
   },
   "files": [
     "dist",
+    "extension",
     "README.md",
     "LICENSE"
   ],
@@ -18,29 +19,24 @@
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
-    "./server": {
-      "types": "./dist/server.d.ts",
-      "import": "./dist/server.js",
-      "require": "./dist/server.cjs"
+    "./extension": {
+      "types": "./dist/extension.d.ts",
+      "import": "./dist/extension.js",
+      "require": "./dist/extension.cjs"
     }
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/prepare-extension.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "pack:check": "npm pack --dry-run"
   },
-  "peerDependencies": {
-    "playwright-core": ">=1.40.0"
-  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "jsdom": "^26.0.0",
-    "playwright-core": "^1.55.0",
     "tsup": "^8.5.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.4"
   }
 }
-

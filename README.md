@@ -1,106 +1,114 @@
 # chromium-web-embed
 
-مكتبة TypeScript لعرض جلسة Chromium تعمل على خادم والتحكم بها من تطبيق ويب. توفر المكتبة جزأين متكاملين: عميل متصفح ينشئ عارضًا تفاعليًا داخل عنصر DOM، وخادم Node.js يربط هذا العارض بصفحة Chromium عبر `playwright-core`.
+`chromium-web-embed` is a TypeScript library and a Manifest V3 Chrome extension for letting **approved web applications** open and manage tabs in the user's real Chrome browser. It replaces the previous remote-Chromium architecture: no Playwright process, no screenshot stream, no browser server, and no session token are required.
 
-> هذه المكتبة لا تضع Chromium داخل عملية المتصفح الخاصة بالمستخدم مباشرة. بدلًا من ذلك، تعمل جلسة Chromium على خادم وتُرسل لقطات JPEG دورية إلى الواجهة، بينما تُرسل أحداث لوحة المفاتيح والفأرة إلى الخادم.
+> This package does not render another website *inside* your web application. Modern browser isolation prevents that. Instead, it opens or manages a real local Chrome tab and returns tab metadata and lifecycle events to the approved web app.
 
-## المتطلبات
+## What it can do
 
-يتطلب الخادم Node.js 20 أو أحدث، ومتصفح Chromium مثبتًا في البيئة التي تشغّل Playwright. يتطلب تطبيق الويب متصفحًا حديثًا يدعم `fetch` و`URL.createObjectURL`. يجب تثبيت `playwright-core` في التطبيق الذي يستخدم نقطة التصدير `/server`.
+| Capability | Available |
+| --- | --- |
+| Open a real Chrome tab | Yes |
+| Navigate, focus, reload, go back or forward | Yes |
+| List browser tabs and read tab metadata | Yes, with the `tabs` permission |
+| Pin, mute, and close managed tabs | Yes |
+| Receive tab update, activation, and removal events | Yes |
+| Render another origin in an iframe-like surface | No |
+| Read page DOM, keystrokes, passwords, or cookies | No |
+| Run arbitrary JavaScript in a page | No |
+| Screenshot or stream tab pixels | No |
 
-## التثبيت
+The deliberately limited surface keeps the extension compatible with Chrome's permission model and prevents a web app from becoming an unrestricted remote-control tool.
+
+## Install
+
+Install directly from the public GitHub repository until a registry release is published:
 
 ```bash
-npm install chromium-web-embed playwright-core
+npm install github:MOHOAI/chromium-web-embed
 ```
 
-ثبّت Chromium بالطريقة المناسبة لبيئتك، ثم استخدم Playwright لفتح المتصفح. لا تقوم هذه الحزمة بتنزيل متصفح تلقائيًا.
+Build the extension bundle from a clone of this repository:
 
-## تشغيل الخادم
-
-```ts
-import { chromium } from 'playwright-core';
-import { createChromiumControlServer } from 'chromium-web-embed/server';
-
-const browser = await chromium.launch({
-  headless: true,
-  executablePath: process.env.CHROMIUM_EXECUTABLE_PATH
-});
-
-const controlServer = createChromiumControlServer({
-  browser,
-  token: process.env.CHROMIUM_VIEWER_TOKEN,
-  corsOrigin: 'https://app.example.com'
-});
-
-const address = await controlServer.listen({ host: '127.0.0.1', port: 8787 });
-console.log(`Chromium control server: ${address.url}`);
+```bash
+npm install
+npm run build
 ```
 
-يمكن تمرير `page` جاهزة بدلًا من إنشاء صفحة جديدة تلقائيًا:
+The build writes a load-unpacked extension to `extension/`.
 
-```ts
-const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-const controlServer = createChromiumControlServer({ browser, page });
-```
+## Configure the extension
 
-## الاستخدام داخل تطبيق الويب
+Before installing, edit `extension/manifest.json` and replace the demonstration origins in both `content_scripts.matches` and `externally_connectable.matches` with the exact web-app origins you trust.
 
-```ts
-import { createChromiumViewer } from 'chromium-web-embed';
-
-const viewer = createChromiumViewer(
-  document.querySelector('#browser')!,
-  {
-    endpoint: 'https://browser-api.example.com',
-    token: viewerToken,
-    refreshInterval: 250,
-    autoFocus: true
-  },
-  {
-    onError: (error) => console.error('Chromium viewer error', error),
-    onScreenshot: (image) => console.debug('Screenshot bytes', image.size)
+```json
+{
+  "content_scripts": [{
+    "matches": ["https://app.example.com/*"],
+    "js": ["bridge.js"]
+  }],
+  "externally_connectable": {
+    "matches": ["https://app.example.com/*"]
   }
-);
-
-await viewer.start();
-await viewer.navigate('https://example.com');
-const title = await viewer.evaluate<string>({ expression: 'document.title' });
-console.log(title);
-
-// عند إزالة المكوّن من الصفحة:
-viewer.stop();
-```
-
-لا تصدّر النسخة الحالية ملف CSS منفصلًا؛ الأنماط الأساسية تُطبّق تلقائيًا على العنصر. يمكن ضبط الحجم باستخدام CSS:
-
-```css
-#browser {
-  width: 100%;
-  height: 720px;
 }
 ```
 
-## الواجهة العامة
+Then open `chrome://extensions`, enable **Developer mode**, select **Load unpacked**, and choose the `extension/` directory. Reload your web application after installation.
 
-| التصدير | الوظيفة |
+> Do not use `https://*/*` as an approved origin. Every origin in this list can ask the extension to manage the user's Chrome tabs.
+
+## Use in a web application
+
+```ts
+import { createRealBrowserClient } from "chromium-web-embed";
+
+const browser = createRealBrowserClient();
+
+try {
+  const extension = await browser.connect();
+  console.log("Extension", extension.version, "is ready");
+
+  const { tab } = await browser.open("https://example.com", {
+    active: true,
+    pinned: false,
+  });
+
+  await browser.reload(tab.id);
+  await browser.pin(tab.id);
+
+  const unsubscribe = browser.onTabEvent((event) => {
+    console.log("Browser event", event);
+  });
+
+  // Call later when the component unmounts.
+  unsubscribe();
+  browser.dispose();
+} catch (error) {
+  // The extension is missing, disabled, or this web-app origin is not approved.
+  console.error(error);
+}
+```
+
+## API
+
+| Export | Purpose |
 | --- | --- |
-| `ChromiumViewer` | إنشاء عارض، بدء/إيقاف التحديث، التنقل، تنفيذ JavaScript، وإرسال الإدخال. |
-| `createChromiumViewer` | إنشاء العارض وإضافته إلى عنصر DOM في خطوة واحدة. |
-| `ChromiumControlServer` | خادم HTTP يربط العارض بصفحة Playwright. |
-| `createChromiumControlServer` | دالة مصنع لإنشاء الخادم. |
+| `RealBrowserClient` | Browser-side client for the local extension bridge. |
+| `createRealBrowserClient()` | Creates a client with a 1.5-second default response timeout. |
+| `BrowserTab` | Safe tab metadata returned to the web app. |
+| `BrowserEvent` | `updated`, `activated`, or `removed` lifecycle event. |
+| `normalizeTabUrl()` | Accepts only HTTP and HTTPS URLs. |
+| `createRealBrowserExtensionManifest()` | Creates a restrictive Manifest V3 configuration for a known set of origins. |
 
-يدعم الخادم المسارات الداخلية التالية: `GET /health`، و`GET /screenshot`، و`POST /navigate`، و`POST /evaluate`، و`POST /input`. عند تمرير `token` يجب على العميل إرسال ترويسة `Authorization: Bearer <token>`.
+The client offers `connect`, `status`, `open`, `list`, `active`, `navigate`, `activate`, `reload`, `back`, `forward`, `close`, `pin`, `mute`, `onTabEvent`, and `dispose`.
 
-## الأمان والتشغيل الإنتاجي
+## Security model
 
-لا تعرض الخادم مباشرة على الإنترنت دون مصادقة قوية وتشفير TLS وطبقة proxy مناسبة. استخدم `token` طويلًا عشوائيًا، واضبط `corsOrigin` على أصل الواجهة الفعلي بدل `*`. لا تسمح للمستخدمين غير الموثوقين باستدعاء `evaluate` أو `navigate`؛ فهاتان الوظيفتان تمنحان تحكمًا واسعًا في جلسة المتصفح. يفضّل تشغيل Chromium داخل حاوية معزولة وبحساب نظام محدود الصلاحيات، كما يفضّل استخدام خادم تحكم لكل جلسة أو لكل مستخدم عند الحاجة إلى العزل.
+The site-side library sends versioned, JSON-only commands through a content-script bridge that checks `window.location.origin`. The extension accepts a fixed allowlist of commands and checks tab identifiers and URL schemes before calling `chrome.tabs`. It does not include a command for evaluating JavaScript, reading the page DOM, injecting code, or accessing credentials.
 
-## القيود الحالية
+The `tabs` permission is used only to return tab titles and URLs to approved applications. The extension does not request broad host permissions. If you add permissions such as `scripting`, `activeTab`, or host access in a fork, treat that fork as a new security review.
 
-يستخدم العارض لقطات JPEG دورية، ولذلك فهو مناسب لأدوات الإدارة والاختبارات والتصفح التفاعلي الخفيف، وليس بديلًا كاملًا لبث فيديو منخفض التأخير. لا تتضمن النسخة الحالية الصوت أو مشاركة الحافظة أو رفع الملفات أو تبويبات متعددة أو WebRTC. يمكن إضافة هذه القدرات لاحقًا عبر طبقة بث مخصصة وواجهات جلسات أوسع.
-
-## التطوير المحلي
+## Development
 
 ```bash
 npm install
@@ -110,15 +118,19 @@ npm run build
 npm run pack:check
 ```
 
-الحزمة قابلة للنشر بعد نجاح الفحوص، لكن إنشاء مستودع GitHub عام أو نشرها في npm يتطلب موافقة صريحة منفصلة.
+The test suite covers URL validation, protocol validation, tab-control commands, manifest construction, and client message exchange.
 
-## الترخيص
+## Migration from 0.x
 
-مرخصة بموجب MIT. راجع ملف `LICENSE`.
+Version 1.0.0 is a deliberate breaking change. It removes the remote Playwright server, JPEG viewer, bearer token, and the `/server` export. Replace `ChromiumViewer` with `RealBrowserClient`, install the extension once, and use a real local tab instead of a remote session.
 
-## مراجع
+## References
 
-- [Playwright Browser API](https://playwright.dev/docs/api/class-browser)
-- [Playwright Page API](https://playwright.dev/docs/api/class-page)
-- [npm package.json exports](https://docs.npmjs.com/cli/v11/configuring-npm/package-json)
+- [Chrome: `chrome.tabs` API](https://developer.chrome.com/docs/extensions/reference/api/tabs)
+- [Chrome: Message passing](https://developer.chrome.com/docs/extensions/develop/concepts/messaging)
+- [Chrome: Content scripts](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts)
+- [Chrome: `externally_connectable`](https://developer.chrome.com/docs/extensions/reference/manifest/externally-connectable)
 
+## License
+
+MIT. See [LICENSE](LICENSE).
