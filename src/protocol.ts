@@ -1,5 +1,5 @@
-export const BRIDGE_CHANNEL = "real-browser-web/v2";
-export const BRIDGE_VERSION = 2;
+export const BRIDGE_CHANNEL = "real-browser-web/v3";
+export const BRIDGE_VERSION = 3;
 
 export const TAB_ACTIONS = [
   "status",

@@ -1,82 +1,125 @@
 # chromium-web-embed
 
-`chromium-web-embed` مكتبة TypeScript مع إضافة Chrome من نوع Manifest V3 تمنح تطبيق الويب **مساحة متصفح مُدارة** داخل Chrome المحلي للمستخدم. بعد تثبيت الإضافة واتصال التطبيق بها، تنشئ المكتبة مجموعة تبويبات جديدة تحمل اسم التطبيق وتعرض التبويب النشط فيها داخل واجهة الويب مع إمكانية فتح التبويبات والتنقل والنقر والتمرير والكتابة.
+> **مساحة Chrome مُدارة، مرئية، ومعزولة بالأصل لتطبيقات الويب ووكلاء الذكاء الاصطناعي.**
 
-> لا يمكن لموقع ويب تضمين صفحات الويب الأخرى بحرية عبر `iframe`. يعرض `SharedTabViewer` لقطات دورية من تبويب مجموعة التطبيق ويرسل أحداث الإدخال إليه محليًا عبر Chrome DevTools Protocol. لا تمر الجلسة عبر خادم وسيط.
+`chromium-web-embed` هي مكتبة TypeScript وإضافة Chrome من نوع Manifest V3. تمنح تطبيق الويب مساحة تبويبات جديدة يملكها التطبيق نفسه، ثم تعرض التبويب النشط داخل واجهته وترسل إليه تفاعلات المستخدم أو الوكيل محليًا. لا تمر الجلسة عبر خادم وسيط، ولا تستطيع المكتبة رؤية تبويبات المستخدم القائمة أو كلمات مروره أو محتوى DOM.
 
-## ما الذي تغيّر في الإصدار 2.2
+| الإصدار | حالة النطاق | الترخيص | التنزيل |
+| --- | --- | --- | --- |
+| **3.0.0** | مساحة مُدارة فقط | MIT | [ملف الإضافة ZIP](https://github.com/MOHOAI/chromium-web-embed/raw/refs/heads/main/extension-download/real-browser-web-bridge-extension.zip) |
 
-لا تختار الإضافة تبويبًا قائمًا من تبويبات المستخدم، ولا تعرض قائمته. بدلًا من ذلك، ينشئ التطبيق مساحة جديدة معزولة بحسب أصله، وتضم المجموعة التبويبات التي فتحها التطبيق فقط. إغلاق المساحة يغلق تبويباتها ويوقف كل تحكم صادر منها.
+## لماذا هذه المكتبة؟
 
-| الإمكانية | الحالة |
+تطبيقات الويب لا تستطيع تضمين المواقع الأخرى بحرية بسبب سياسات المتصفح. يعالج `chromium-web-embed` هذه المشكلة بنموذج مرئي ومحلي: تنشئ الإضافة تبويبات جديدة للموقع المتصل، ويعرض `SharedTabViewer` لقطات دورية للتبويب المُدار ويرسل أحداث الإدخال إليه عبر Chrome DevTools Protocol. يبقى المستخدم داخل Chrome، ويرى التبويبات التي أنشأها التطبيق، ويمكنه إيقاف مساحة العمل أو تحكم الوكيل بوضوح.
+
+```mermaid
+flowchart LR
+  A[تطبيق ويب أو تطبيق داخل iframe] -->|رسائل محلية مقيدة بالأصل| B[جسر الإضافة في الإطار]
+  B --> C[عامل خدمة Manifest V3]
+  C --> D[مساحة تبويبات جديدة معزولة]
+  D -->|لقطة + إدخال| E[SharedTabViewer]
+  E --> A
+```
+
+## ما الجديد في 3.0.0
+
+يدعم الإصدار **3.0.0** التطبيقات التي تعمل داخل `iframe`. يُثبت جسر الإضافة داخل كل إطار HTTP(S) مؤهل، ويُعرّف مساحة العمل بحسب **أصل التطبيق داخل الإطار** وليس أصل الصفحة الحاوية. لذلك يستطيع التطبيق المضمّن استدعاء المكتبة مباشرة، من دون قناة `postMessage` مع الأب ومن دون مشاركة صلاحيات الأب أو مساحته.
+
+| السيناريو | السلوك في 3.0.0 |
 | --- | --- |
-| إنشاء مجموعة تبويبات خاصة بالتطبيق | متاح تلقائيًا بعد الاتصال |
-| فتح وإدارة تبويبات المجموعة من التطبيق | متاح |
-| عرض التبويب النشط والنقر والتمرير والكتابة فيه | متاح داخل المجموعة فقط |
-| إعادة تسمية المساحة وتثبيت أو كتم أو نسخ تبويباتها | متاح |
-| لقطة وصفية للمساحة (`workspaceSnapshot`) | متاح للمراقبة والتخطيط |
-| تحويل المجموعة إلى مساحة لوكيل ذكاء اصطناعي | متاح بعد تفعيل صريح من المستخدم |
-| كتابة وحذف واختصارات مهيأة للتركيب والتركيز | متاح |
-| ملفات عرض سريعة ومتوازنة ودقيقة مع مقاييس أداء | متاح |
-| سجل نشاط محلي للوكيل وتشخيص تعافٍ آمن | متاح |
-| عرض تبويبات المستخدم الموجودة أو إدارتها | غير متاح |
-| الوصول إلى سطح المكتب أو تطبيقات النظام الأصلية | غير متاح |
-| قراءة DOM أو كلمات المرور أو ملفات تعريف الارتباط | غير متاح |
-| تنفيذ JavaScript اعتباطي داخل المواقع | غير متاح |
+| التطبيق يعمل كصفحة رئيسية | ينشئ مساحة مرتبطة بأصل الصفحة. |
+| التطبيق يعمل داخل `iframe` من أصل آخر | ينشئ مساحة مستقلة مرتبطة بأصل الإطار. |
+| الصفحة الحاوية تحاول التحكم بمساحة الإطار | غير مسموح؛ لا توجد صلاحية ضمنية بين الأصلين. |
+| الإطار يستقبل تحديثات مساحة عمله | تصل الأحداث إلى `frameId` الصحيح فقط. |
+| إطار sandbox بلا `allow-same-origin` | غير مدعوم عمدًا لأن أصله مبهم ولا يمكن التحقق منه. |
 
-## تنزيل الإضافة وتثبيتها
+> **القاعدة الأمنية:** تضمين التطبيق لا يمنح الصفحة الحاوية حق التحكم به. كل إطار يتصل بجسره المحلي فقط، ويستطيع إنشاء وإدارة التبويبات الموجودة في مساحة أصله فقط.
 
-**[تنزيل إضافة Real Browser Web Bridge](https://github.com/MOHOAI/chromium-web-embed/raw/refs/heads/main/extension-download/real-browser-web-bridge-extension.zip)**
+## القدرات والحدود
 
-1. فك ضغط الملف في مجلد ثابت على جهازك.
-2. افتح `chrome://extensions` في Chrome.
-3. فعّل **وضع المطور**.
-4. اختر **تحميل بدون حزمة** ثم حدد المجلد الناتج عن فك الضغط.
-5. تأكد من تفعيل الإضافة وأعد تحميل موقع تطبيقك.
-6. يبدأ تطبيقك مساحة المتصفح الخاصة به عبر `createWorkspace()`؛ لا يتطلب ذلك فتح نافذة الإضافة أو اختيار تبويب.
+| متاح داخل مساحة التطبيق | غير متاح إطلاقًا عبر هذه المكتبة |
+| --- | --- |
+| إنشاء مجموعة تبويبات، فتحها، إغلاقها، وإعادة تسميتها | استعراض تبويبات المستخدم القائمة أو إدارتها |
+| تنقل، رجوع، تقدم، إعادة تحميل، تثبيت، كتم، ونسخ تبويبات المساحة | قراءة كلمات المرور أو ملفات تعريف الارتباط أو DOM |
+| نقر أيسر/أيمن/مزدوج/ثلاثي، تمرير، تحويم، كتابة، حذف، قص/نسخ/لصق | التحكم بسطح المكتب أو التطبيقات الأصلية |
+| لقطات عرض متدرجة ومقاييس أداء وسجل نشاط محلي للوكيل | تنفيذ JavaScript اعتباطي داخل المواقع |
+| وكيل ذكاء اصطناعي بعد تفعيل صريح من المستخدم | إعادة تنفيذ الأوامر المتغيرة تلقائيًا بعد انقطاع الاتصال |
 
-لا يسمح Chrome بتثبيت إضافة غير منشورة في متجر Chrome مباشرةً من رابط ويب، لذلك يقدّم الرابط ملف ZIP للتثبيت اليدوي.
+## التثبيت
 
-## التثبيت البرمجي
+### 1. ثبّت الإضافة محليًا
+
+نزّل [ملف الإضافة](https://github.com/MOHOAI/chromium-web-embed/raw/refs/heads/main/extension-download/real-browser-web-bridge-extension.zip)، ثم فك ضغطه وافتح `chrome://extensions`. فعّل **وضع المطور**، واختر **تحميل بدون حزمة** وحدد المجلد المفكوك. أعِد تحميل تطبيقك بعد تفعيل الإضافة.
+
+### 2. أضف المكتبة إلى التطبيق
 
 ```bash
 npm install github:MOHOAI/chromium-web-embed
 ```
 
-## الاستخدام داخل تطبيق ويب
+## البدء السريع
 
 ```ts
-import { createRealBrowserClient, SharedTabViewer } from "chromium-web-embed";
+import { RealBrowserClient, SharedTabViewer } from "chromium-web-embed";
 
-const browser = createRealBrowserClient();
+const browser = new RealBrowserClient();
 await browser.waitForExtension();
 
-// تنشئ المجموعة وتفتح أول تبويب فيها.
-const { workspace, tab } = await browser.createWorkspace({
+const { tab } = await browser.createWorkspace({
   label: "تطبيقي",
   url: "https://example.com",
   agentControl: false,
 });
 
-// افتح تبويبًا جديدًا أو انتقل بالتبويب الحالي داخل هذه المجموعة فقط.
-await browser.openInWorkspace("https://www.wikipedia.org", { active: true });
-await browser.navigateInWorkspace(tab.id, "https://example.com/docs");
-
-const viewer = new SharedTabViewer(browser, document.querySelector("#managed-tab")!, {
-  renderProfile: "balanced",
-  onError: console.error,
-});
+const viewer = new SharedTabViewer(
+  browser,
+  document.querySelector<HTMLElement>("#managed-tab")!,
+  { renderProfile: "balanced", onError: console.error },
+);
 await viewer.start();
 
-// عند إلغاء تركيب المكوّن أو إنهاء الجلسة:
+await browser.navigateInWorkspace(tab.id, "https://example.com/docs");
+
+// عند إلغاء تركيب المكون:
 viewer.dispose();
 await browser.closeWorkspace();
 browser.dispose();
 ```
 
-## واجهة وكيل الذكاء الاصطناعي
+## تطبيق داخل iframe
 
-يمكن لتطبيقك تفعيل وصول وكيل إلى مساحة التطبيق بعد موافقة المستخدم الواضحة:
+يحمّل **التطبيق المضمّن نفسه** المكتبة وينشئ العميل. لا يمرر الأب كائن عميل، ولا يحتاج التطبيق إلى الوصول إلى `window.parent`.
+
+```html
+<!-- في الموقع الحاوي: لا تمنح هذه الوسمة صلاحية إضافية للأب. -->
+<iframe
+  src="https://widget.example/app"
+  title="تطبيق متصفح مستقل"
+  allow="clipboard-read; clipboard-write"
+  sandbox="allow-scripts allow-same-origin"
+></iframe>
+```
+
+```ts
+// داخل https://widget.example/app فقط
+import {
+  createEmbeddedBrowserClient,
+  getEmbeddedApplicationContext,
+} from "chromium-web-embed";
+
+const context = getEmbeddedApplicationContext();
+console.info(context.embedded, context.origin); // true, https://widget.example
+
+const browser = createEmbeddedBrowserClient();
+await browser.waitForExtension();
+await browser.createWorkspace({ label: "مساحة Widget" });
+```
+
+راجع [دليل التطبيقات المضمّنة](docs/guides/embedded-apps.md) لنموذج React، وقيود `sandbox`، وخطوات التشخيص.
+
+## تحكم الوكيل
+
+تحكم الوكيل محصور في مساحة التطبيق المُدارة ويتطلب موافقة صريحة من المستخدم. تُسجل العمليات محليًا، ولا يُعاد تنفيذ الأوامر المتغيرة تلقائيًا بعد فقد الاتصال.
 
 ```ts
 import { createManagedBrowserAgent } from "chromium-web-embed";
@@ -87,62 +130,47 @@ const agent = createManagedBrowserAgent({ client: browser });
 await agent.open("https://example.com");
 await agent.click(420, 260);
 await agent.type("بحث تجريبي");
-const snapshot = await agent.snapshot();
 await agent.clear();
-await agent.type("بحث تجريبي جديد");
+await agent.type("بحث جديد");
 console.table(agent.getActivityLog());
 
-// يوقف المستخدم أو التطبيق هذه القدرة فورًا.
 await browser.setAgentControl(false);
 ```
 
-ينفّذ الوكيل أوامره في **المجموعة التي أنشأها التطبيق فقط**. هذه المكتبة تقدم تحكمًا في صفحات Chrome ضمن تلك المجموعة، وليست أداة تحكم عام في الحاسوب أو سطح المكتب. التحكم في نظام التشغيل أو التطبيقات الأصلية يتطلب مكوّنًا محليًا بصلاحيات مختلفة وغير مشمول في هذه الإضافة.
+## واجهة API
 
-## الأمان والنطاقات
-
-تستخدم الإضافة جسر محتوى يعمل مع تطبيقات HTTP وHTTPS حتى يمكن تضمين المكتبة في مواقع مختلفة. تعزل الإضافة كل مساحة وفق `window.origin` للتطبيق الذي أنشأها، ولا تقبل الأوامر إلا عبر البروتوكول المعرّف للمكتبة. يجب أن يقدّم التطبيق نفسه واجهة مرئية لتفعيل وإيقاف تحكم الوكيل، وألا يفعّله تلقائيًا.
-
-لشرح رسائل نافذة الإضافة وخطوات معالجة اتصال الجسر، راجع [دليل تشخيص نافذة الإضافة](docs/popup-diagnostics.md).
-
-تحتاج الإضافة إلى صلاحيات `tabs` و`tabGroups` و`debugger` لكي تنشئ المجموعة وتلتقط لقطاتها وترسل أحداث الإدخال إليها. لا تمنح هذه الصلاحيات الوصول إلى كلمات المرور أو ملفات تعريف الارتباط أو محتوى DOM.
+| التصدير | الاستخدام |
+| --- | --- |
+| `RealBrowserClient` | اتصال مباشر عندما يكون التطبيق صفحة رئيسية. |
+| `createEmbeddedBrowserClient()` | اتصال إطار مستقل بأصل الإطار فقط. |
+| `getEmbeddedApplicationContext()` | تشخيص موضع التطبيق داخل إطار دون قراءة حالة الأب. |
+| `SharedTabViewer` | عرض اللقطة وتمرير الإدخال إلى تبويب المساحة النشط. |
+| `ManagedBrowserAgent` | تنفيذ أوامر الوكيل بعد موافقة المستخدم. |
+| `getConnectionDiagnostic()` | قراءة حالة الجسر والتعافي من انقطاعه. |
 
 ## أدلة التكامل
 
-ابدأ بالدليل المتوافق مع بنية تطبيقك. كل الأمثلة تراعي أن الجسر يعمل داخل متصفح المستخدم وأن التطبيق لا يرى سوى التبويبات التي أنشأها في مساحته.
-
-| الدليل | يناسب |
+| الدليل | الوصف |
 | --- | --- |
-| [JavaScript مباشر](docs/guides/plain-javascript.md) | صفحات HTML أو تطبيقات JavaScript دون إطار. |
-| [React](docs/guides/react.md) | مكونات React ودورة حياتها. |
-| [تنسيق الخادم](docs/guides/backend-coordination.md) | واجهات Node.js التي تصدر نوايا آمنة وسجلات موافقة. |
-| [وكلاء الذكاء الاصطناعي](docs/guides/ai-agent.md) | تخطيط منظم وتحكم محدود بعد موافقة المستخدم. |
-| [نموذج وكيل مرجعي](examples/ai-agent-reference.ts) | حلقة observe → plan → act → verify كاملة قابلة للتعديل. |
-| [الأخطاء الشائعة](docs/troubleshooting.md) | أعراض الإضافة والعارض والإدخال والتعافي مع حلول عملية. |
+| [JavaScript مباشر](docs/guides/plain-javascript.md) | صفحة HTML أو تطبيق JavaScript بسيط. |
+| [React](docs/guides/react.md) | تركيب العارض وإدارته ضمن دورة حياة React. |
+| [التطبيقات المضمّنة](docs/guides/embedded-apps.md) | الوصول الآمن من `iframe` في الإصدار 3.0.0. |
+| [وكلاء الذكاء الاصطناعي](docs/guides/ai-agent.md) | موافقات، سجل نشاط، وأوامر محصورة. |
+| [تنسيق الخادم](docs/guides/backend-coordination.md) | فصل نية الخادم عن تنفيذ العميل المحلي. |
+| [الأخطاء الشائعة](docs/troubleshooting.md) | تشخيص الإضافة والعارض والإدخال. |
 | [الأداء والاعتمادية](docs/performance-reliability.md) | ملفات العرض والمقاييس وسياسة إعادة الاتصال. |
-| [فهرس 300 تحسين](docs/roadmap-300.md) | بطاقات منتج وهندسة مرتبة وقابلة للاختبار، وليست ادعاء ميزات منفذة. |
 
-## واجهة API المختصرة
+## الأمان والخصوصية
 
-| التصدير أو الأمر | الغرض |
-| --- | --- |
-| `RealBrowserClient` | عميل اتصال تطبيق الويب بالإضافة المحلية |
-| `createWorkspace()` | إنشاء مجموعة تبويبات جديدة ومنعزلة للتطبيق |
-| `openInWorkspace()` / `navigateInWorkspace()` | فتح تبويبات المجموعة أو التنقل فيها |
-| `listWorkspaceTabs()` / `activateInWorkspace()` | عرض تبويبات المجموعة والتبديل بينها |
-| `renameWorkspace()` / `pinWorkspaceTab()` / `muteWorkspaceTab()` / `duplicateWorkspaceTab()` | تسمية مساحة التطبيق وإدارة تبويباتها |
-| `workspaceSnapshot()` | قراءة حالة المساحة وتبويباتها بلقطة واحدة |
-| `closeWorkspace()` | إغلاق تبويبات المجموعة وإيقاف المساحة |
-| `SharedTabViewer` | عرض لقطة التبويب النشط وتمرير الإدخال إليه |
-| `SharedTabViewer#getMetrics()` | قراءة زمن الالتقاط ومعدل التحديث والإطارات الفعلي |
-| `setAgentControl()` و`ManagedBrowserAgent` | تمكين وتنفيذ أوامر الوكيل داخل المجموعة بعد الموافقة |
-| `ManagedBrowserAgent#clear()` / `press()` / `scroll()` / `getActivityLog()` | إدخال منضبط ومراجعة نشاط الوكيل |
-| `getConnectionDiagnostic()` | تشخيص حالة الجسر المحلي والاتصال |
+يقبل الجسر الأوامر الموقعة ببروتوكول الإصدار 3 من نفس أصل الإطار فقط، ويشتق عامل الإضافة الملكية من عنوان **المستند المرسل**. تُوجّه الأحداث إلى الإطار المشترك نفسه عبر `frameId`. يجب أن يستخدم ناشرو الإضافة في البيئات الإنتاجية قائمة `allowedOrigins` دقيقة في Manifest بدل الأنماط الواسعة، وأن يعرض التطبيق عنصر تحكم مرئيًا لتفعيل أو تعطيل تحكم الوكيل.
+
+تحتاج الإضافة إلى `tabs` و`tabGroups` و`debugger` و`scripting` و`storage` لتنشئ مساحة العمل المرئية، تلتقط إطار العرض، وترسل التفاعل إلى تبويبات تلك المساحة. لا توفر هذه الصلاحيات API لقراءة كلمات المرور أو ملفات تعريف الارتباط أو DOM.
 
 ## التطوير والتحقق
 
 ```bash
 npm install
-npm run type
+npm run typecheck
 npm test
 npm run build
 npm run pack:check
@@ -150,12 +178,12 @@ npm run pack:check
 
 ينشئ `npm run build` مجلد `extension/` وملف التنزيل `extension-download/real-browser-web-bridge-extension.zip`.
 
-## مراجع Chrome
+## المراجع
 
 - [Chrome Debugger API](https://developer.chrome.com/docs/extensions/reference/api/debugger)
 - [Chrome Tabs API](https://developer.chrome.com/docs/extensions/reference/api/tabs)
 - [Chrome Tab Groups API](https://developer.chrome.com/docs/extensions/reference/api/tabGroups)
-- [Chrome message passing](https://developer.chrome.com/docs/extensions/develop/concepts/messaging)
+- [رسائل إضافات Chrome](https://developer.chrome.com/docs/extensions/develop/concepts/messaging)
 
 ## الترخيص
 

@@ -1,6 +1,6 @@
 // src/protocol.ts
-var BRIDGE_CHANNEL = "real-browser-web/v2";
-var BRIDGE_VERSION = 2;
+var BRIDGE_CHANNEL = "real-browser-web/v3";
+var BRIDGE_VERSION = 3;
 var TAB_ACTIONS = [
   "status",
   "subscribe",
@@ -108,7 +108,7 @@ function assertAgentControlEnabled(workspace) {
 }
 
 // src/extension-worker.ts
-var EXTENSION_VERSION = "2.2.1";
+var EXTENSION_VERSION = "3.0.0";
 var WORKSPACES_KEY = "managedBrowserWorkspaces";
 var subscribers = /* @__PURE__ */ new Map();
 var attachedDebuggerTabs = /* @__PURE__ */ new Set();
@@ -124,7 +124,7 @@ function safeOrigin(value) {
   }
 }
 function pageOrigin(sender) {
-  const origin = safeOrigin(sender.tab?.url ?? sender.tab?.pendingUrl);
+  const origin = safeOrigin(sender.origin ?? sender.url ?? sender.tab?.url ?? sender.tab?.pendingUrl);
   if (!origin) throw new Error("Managed browser commands are allowed only from an approved HTTP(S) web page.");
   return origin;
 }
@@ -215,11 +215,11 @@ function response(requestId, ok, result, error) {
 }
 async function broadcast(workspace, event) {
   const message = { channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "event", event };
-  await Promise.all([...subscribers.entries()].filter(([, origin]) => origin === workspace.origin).map(async ([tabId]) => {
+  await Promise.all([...subscribers.entries()].filter(([, subscriber]) => subscriber.origin === workspace.origin).map(async ([key, subscriber]) => {
     try {
-      await chrome.tabs.sendMessage(tabId, message);
+      await chrome.tabs.sendMessage(subscriber.tabId, message, { frameId: subscriber.frameId });
     } catch {
-      subscribers.delete(tabId);
+      subscribers.delete(key);
     }
   }));
 }
@@ -549,7 +549,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.action === "subscribe") {
         const siteTabId = sender.tab?.id;
         if (!Number.isInteger(siteTabId)) throw new Error("Subscriptions are only allowed from an approved web page.");
-        subscribers.set(siteTabId, origin);
+        const frameId = Number.isInteger(sender.frameId) ? sender.frameId : 0;
+        subscribers.set(`${siteTabId}:${frameId}`, { tabId: siteTabId, frameId, origin });
         return response(message.requestId, true, { subscribed: true });
       }
       return response(message.requestId, true, await handleWorkspaceAction(origin, message.action, message.data));

@@ -18,14 +18,14 @@ import {
 
 declare const chrome: any;
 
-const EXTENSION_VERSION = "2.2.1";
+const EXTENSION_VERSION = "3.0.0";
 const WORKSPACES_KEY = "managedBrowserWorkspaces";
-const subscribers = new Map<number, string>();
+const subscribers = new Map<string, { tabId: number; frameId: number; origin: string }>();
 const attachedDebuggerTabs = new Set<number>();
 const workspaces = new Map<string, ManagedBrowserWorkspace>();
 let restored = false;
 
-type MessageSender = { tab?: { id?: number; url?: string; pendingUrl?: string } };
+type MessageSender = { origin?: string; url?: string; frameId?: number; tab?: { id?: number; url?: string; pendingUrl?: string } };
 
 function safeOrigin(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -36,7 +36,9 @@ function safeOrigin(value: unknown): string | null {
 }
 
 function pageOrigin(sender: MessageSender): string {
-  const origin = safeOrigin(sender.tab?.url ?? sender.tab?.pendingUrl);
+  // sender.url identifies the document that sent the message. For a content script in an
+  // iframe, sender.tab.url would be the parent page and must never be used for ownership.
+  const origin = safeOrigin(sender.origin ?? sender.url ?? sender.tab?.url ?? sender.tab?.pendingUrl);
   if (!origin) throw new Error("Managed browser commands are allowed only from an approved HTTP(S) web page.");
   return origin;
 }
@@ -132,9 +134,9 @@ function response(requestId: string, ok: boolean, result?: unknown, error?: stri
 
 async function broadcast(workspace: ManagedBrowserWorkspace, event: BrowserEvent): Promise<void> {
   const message: BridgeEvent = { channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "event", event };
-  await Promise.all([...subscribers.entries()].filter(([, origin]) => origin === workspace.origin).map(async ([tabId]) => {
-    try { await chrome.tabs.sendMessage(tabId, message); }
-    catch { subscribers.delete(tabId); }
+  await Promise.all([...subscribers.entries()].filter(([, subscriber]) => subscriber.origin === workspace.origin).map(async ([key, subscriber]) => {
+    try { await chrome.tabs.sendMessage(subscriber.tabId, message, { frameId: subscriber.frameId }); }
+    catch { subscribers.delete(key); }
   }));
 }
 
@@ -424,7 +426,8 @@ chrome.runtime.onMessage.addListener((message: unknown, sender: MessageSender, s
       if (message.action === "subscribe") {
         const siteTabId = sender.tab?.id;
         if (!Number.isInteger(siteTabId)) throw new Error("Subscriptions are only allowed from an approved web page.");
-        subscribers.set(siteTabId as number, origin);
+        const frameId = Number.isInteger(sender.frameId) ? sender.frameId as number : 0;
+        subscribers.set(`${siteTabId}:${frameId}`, { tabId: siteTabId as number, frameId, origin });
         return response(message.requestId, true, { subscribed: true });
       }
       return response(message.requestId, true, await handleWorkspaceAction(origin, message.action, message.data));

@@ -9,8 +9,9 @@ describe("extension manifest", () => {
     expect(manifest.action.default_popup).toBe("popup.html");
     expect(manifest.icons).toEqual({ 16: "icons/icon-16.png", 32: "icons/icon-32.png", 48: "icons/icon-48.png", 128: "icons/icon-128.png" });
     expect(manifest.action.default_icon).toEqual(manifest.icons);
-    expect(manifest.version).toBe("2.2.1");
+    expect(manifest.version).toBe("3.0.0");
     expect(manifest.content_scripts[0]?.matches).toEqual(["https://app.example.com/*"]);
+    expect(manifest.content_scripts[0]?.all_frames).toBe(true);
     expect(manifest.host_permissions).toEqual(["https://app.example.com/*"]);
   });
 

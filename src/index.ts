@@ -36,6 +36,8 @@ export {
 } from "./protocol";
 
 export type RealBrowserClientOptions = { targetOrigin?: string; timeoutMs?: number };
+/** Identifies whether this application is running in an iframe without reading its parent document. */
+export type EmbeddedApplicationContext = { embedded: boolean; origin: string };
 export type ExtensionWaitOptions = { timeoutMs?: number; retryIntervalMs?: number };
 export type ExtensionDiagnosticCode = "bridge-not-detected" | "bridge-ready" | "subscribe-failed" | "reconnecting" | "reconnect-required" | "connected";
 export type ExtensionDiagnostic = { code: ExtensionDiagnosticCode; message: string; checkedAt: number; extensionVersion?: string; bridgeReadyAt?: number };
@@ -264,6 +266,24 @@ export class RealBrowserClient {
   };
 
   private setDiagnostic(next: Omit<ExtensionDiagnostic, "checkedAt">): void { this.diagnostic = { ...next, checkedAt: Date.now() }; }
+}
+
+/**
+ * Creates a client for an application running inside an iframe. The extension installs an
+ * independent bridge in this frame and keys its workspace to this frame's own HTTP(S) origin.
+ * No parent-window message channel, parent-origin trust, or shared workspace is introduced.
+ */
+export function createEmbeddedBrowserClient(options: RealBrowserClientOptions = {}): RealBrowserClient {
+  if (typeof window === "undefined") throw new Error("createEmbeddedBrowserClient must run in a browser window.");
+  return new RealBrowserClient({ ...options, targetOrigin: options.targetOrigin ?? window.location.origin });
+}
+
+/** Returns frame-local context for diagnostics and consent copy without touching parent-window state. */
+export function getEmbeddedApplicationContext(): EmbeddedApplicationContext {
+  if (typeof window === "undefined") throw new Error("getEmbeddedApplicationContext must run in a browser window.");
+  let embedded = false;
+  try { embedded = window.self !== window.top; } catch { embedded = true; }
+  return { embedded, origin: window.location.origin };
 }
 
 /** Renders periodic frames from the active tab in the current managed workspace and forwards input only to that workspace. */

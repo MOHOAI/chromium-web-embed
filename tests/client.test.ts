@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createManagedBrowserAgent, RealBrowserClient, SharedTabViewer } from "../src";
+import { createEmbeddedBrowserClient, createManagedBrowserAgent, getEmbeddedApplicationContext, RealBrowserClient, SharedTabViewer } from "../src";
 import { BRIDGE_CHANNEL, BRIDGE_VERSION, BridgeCommand, BridgeResponse } from "../src/protocol";
 
 const origin = window.location.origin;
@@ -44,6 +44,21 @@ describe("RealBrowserClient managed workspace", () => {
     });
     const client = new RealBrowserClient();
     await expect(client.status()).resolves.toMatchObject({ available: true, version: "2.1.2", model: "managed-workspace", privacy: "origin-isolated" });
+    client.dispose();
+  });
+
+  it("creates an embedded-app client using only the frame-local origin", async () => {
+    const received: BridgeCommand[] = [];
+    vi.spyOn(window, "postMessage").mockImplementation((message: unknown) => {
+      const command = message as Partial<BridgeCommand>;
+      if (command.kind !== "command") return;
+      received.push(command as BridgeCommand);
+      if (command.action === "status") respondTo(command as BridgeCommand, { available: true, version: "3.0.0", capabilities: ["status"], model: "managed-workspace", privacy: "origin-isolated" });
+    });
+    const client = createEmbeddedBrowserClient();
+    await expect(client.status()).resolves.toMatchObject({ version: "3.0.0", privacy: "origin-isolated" });
+    expect(received[0]?.channel).toBe("real-browser-web/v3");
+    expect(getEmbeddedApplicationContext()).toEqual({ embedded: false, origin });
     client.dispose();
   });
 

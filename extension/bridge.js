@@ -1,6 +1,6 @@
 // src/protocol.ts
-var BRIDGE_CHANNEL = "real-browser-web/v2";
-var BRIDGE_VERSION = 2;
+var BRIDGE_CHANNEL = "real-browser-web/v3";
+var BRIDGE_VERSION = 3;
 var TAB_ACTIONS = [
   "status",
   "subscribe",
@@ -39,7 +39,7 @@ function isBridgeEvent(value) {
 
 // src/extension-bridge.ts
 var origin = window.location.origin;
-var extensionVersion = "2.2.1";
+var extensionVersion = "3.0.0";
 var bridgeGlobal = globalThis;
 if (!bridgeGlobal.__realBrowserWebBridgeInstalled) {
   bridgeGlobal.__realBrowserWebBridgeInstalled = true;
