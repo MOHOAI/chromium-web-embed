@@ -60,8 +60,8 @@ async function runApprovedStep(step: AgentStep) {
     case "doubleClick": return agent.doubleClick(step.x, step.y, step.tabId);
     case "type": return agent.type(step.text, step.tabId);
     case "clear": return agent.clear(step.tabId);
-    case "press": return agent.press(step.key, { tabId: step.tabId, code: step.code, modifiers: step.modifiers });
-    case "scroll": return agent.scroll(step.x, step.y, step.deltaX ?? 0, step.deltaY ?? 0, step.tabId);
+    case "press": return agent.press(step.key, { code: step.code, modifiers: step.modifiers }, step.tabId);
+    case "scroll": return agent.scroll(step.deltaY ?? 0, step.deltaX ?? 0, step.tabId, step.x, step.y);
   }
 }
 ```
@@ -98,11 +98,41 @@ agent.clearActivityLog();
 
 لا تفترض أن حقلًا ما لديه تركيز بعد التنقل. على الوكيل النقر أولًا في موضع متحقق، ثم استخدام `type()` للنص المركب، و`clear()` أو `press("Backspace")` للحذف. لا تستبدل الحذف بنص فارغ في حقل من دون التحقق من أن الحقل هو الهدف؛ فقد لا يملك CDP دلالة على العنصر المقصود.
 
+ابتداءً من إصدار الاستقرار هذا، لا يستدعي مسار الإدخال `Page.bringToFront`. أي أن كتابة نص أو حذف محتوى أو إرسال اختصار يجري في تبويب المساحة المُدارة من دون نقل المستخدم إلى تبويب Chrome الحقيقي. يبقى على الوكيل التحقق من لقطة حديثة قبل أي إدخال متغير، لأن عدم نقل نافذة Chrome لا يثبت وحده أن عنصر الصفحة المطلوب هو صاحب التركيز.
+
 ```ts
 await agent.click(420, 260);
 await agent.clear();
 await agent.type("بحث عربي مضبوط");
 await agent.press("Enter", { code: "Enter" });
+```
+
+## قاموس أوامر التفاعل
+
+تجمع الواجهة أدناه الأوامر ذات الأولوية التي يحتاجها المستخدم أو الوكيل عادةً. جميعها تمر عبر `agentExecute` وتبقى ضمن التبويبات التي أنشأتها مساحة التطبيق؛ لا تمنح وصولًا إلى سطح المكتب أو تبويبات المستخدم أو ملفات الجهاز.
+
+| الغرض | الدوال المتاحة | ملاحظة تشغيلية |
+| --- | --- | --- |
+| النقر والتركيز | `click()` و`doubleClick()` و`tripleClick()` و`rightClick()` و`hover()` و`longPress()` | استخدم الإحداثيات من لقطة حديثة؛ النقر الأيمن يفتح سياق الصفحة ضمن المساحة فقط. |
+| السحب والتمرير | `drag()` و`scroll()` و`scrollUp()` و`scrollDown()` | يُرسل السحب بالترتيب: تحويم ثم ضغط ثم تحريك ثم إفلات. |
+| النص والحافظة | `type()` و`selectAll()` و`clear()` و`copy()` و`cut()` و`paste()` | `paste(text)` يرسل النص المقدم صراحةً ولا يقرأ حافظة الجهاز. |
+| التحرير واختصارات الصفحة | `undo()` و`redo()` و`find()` و`confirm()` و`cancel()` و`toggle()` | تمثل اختصارات محتوى الصفحة، وقد تختلف استجابة الموقع لها. |
+| تكبير وطباعة | `zoomIn()` و`zoomOut()` و`resetZoom()` و`save()` و`print()` | قد يعرض الموقع أو Chrome حوارًا محليًا؛ لا تتجاوز المكتبة أي نافذة موافقة. |
+| التنقل والتبويب | `open()` و`navigate()` و`reload()` و`back()` و`forward()` و`activate()` و`duplicate()` و`pin()` و`mute()` و`close()` | راجع العنوان واللقطة قبل التنقل أو الإغلاق أو تغيير صوت التبويب. |
+
+> لا توفر هذه المكتبة تحكمًا بنوافذ نظام التشغيل، أو طباعة صامتة، أو إدارة إعدادات Chrome العامة، أو الإضافات الأخرى، أو كلمات المرور، أو بيانات الدفع، أو إلغاء حوارات أمان المتصفح. استخدم واجهات المنتج الأصلية لهذه المهام، واطلب موافقة منفصلة عندما يكون للعمل أثر دائم.
+
+## قائمة سياق العارض
+
+يمكن للتطبيقات التي تستخدم `SharedTabViewer` تمرير `onContextMenu` لعرض قائمة سياقها الخاصة. يمنع العارض قائمة الصورة أو الفيديو الافتراضية في المتصفح، ويعيد موضعًا داخل اللقطة (`x` و`y`) مع موضع الشاشة (`clientX` و`clientY`). لا تنفذ عناصر القائمة مباشرةً من بيانات DOM غير موثوقة؛ اربط كل عنصر بدالة وكيل محددة ومراجعة.
+
+```ts
+const viewer = new SharedTabViewer(client, host, {
+  onContextMenu: ({ x, y }) => {
+    // مثال: اعرض عناصر واجهة التطبيق فقط.
+    menu.open({ x, y, actions: ["copy", "paste", "scrollDown"] });
+  },
+});
 ```
 
 ## ضوابط مطلوبة في المنتج

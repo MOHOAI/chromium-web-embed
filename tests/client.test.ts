@@ -234,4 +234,68 @@ describe("RealBrowserClient managed workspace", () => {
     expect(activity).toHaveBeenCalled();
     client.dispose();
   });
+
+  it("exposes controlled right-click, drag, clipboard, and zoom primitives only through agentExecute", async () => {
+    const received: BridgeCommand[] = [];
+    vi.spyOn(window, "postMessage").mockImplementation((message: unknown) => {
+      const command = message as Partial<BridgeCommand>;
+      if (command.kind !== "command") return;
+      received.push(command as BridgeCommand);
+      if (command.action === "workspaceCreate") respondTo(command as BridgeCommand, { workspace, tab });
+      if (command.action === "agentExecute") respondTo(command as BridgeCommand, { ok: true });
+    });
+    const client = new RealBrowserClient();
+    await client.createWorkspace({ agentControl: true });
+    const agent = createManagedBrowserAgent({ client });
+    await agent.tripleClick(10, 20);
+    await agent.rightClick(10, 20);
+    await agent.drag(10, 20, 30, 40);
+    await agent.copy();
+    await agent.cut();
+    await agent.paste("ملصق");
+    await agent.undo();
+    await agent.redo();
+    await agent.find();
+    await agent.confirm();
+    await agent.cancel();
+    await agent.toggle();
+    await agent.scrollUp(180);
+    await agent.scrollDown(240);
+    await agent.longPress(31, 41, 0);
+    await agent.save();
+    await agent.print();
+    await agent.zoomIn();
+    await agent.zoomOut();
+    await agent.resetZoom();
+    await agent.activate(8);
+    await agent.back(8);
+    await agent.forward(8);
+    await agent.duplicate(8);
+    await agent.pin(8);
+    await agent.mute(8);
+    await agent.close(8);
+    const agentOperations = received.filter((command) => command.action === "agentExecute").map((command) => (command.data as { operation: { type: string; tabId?: number; input?: Record<string, unknown> } }).operation);
+    const inputs = agentOperations.map((operation) => operation.input).filter((input): input is Record<string, unknown> => Boolean(input));
+    expect(inputs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "pointer", type: "mousePressed", clickCount: 3, button: "left" }),
+      expect.objectContaining({ kind: "pointer", type: "mousePressed", button: "right" }),
+      expect.objectContaining({ kind: "pointer", type: "mouseReleased", x: 30, y: 40 }),
+      expect.objectContaining({ kind: "key", key: "c", modifiers: 2 }),
+      expect.objectContaining({ kind: "text", text: "ملصق" }),
+      expect.objectContaining({ kind: "wheel", deltaY: -180 }),
+      expect.objectContaining({ kind: "pointer", type: "mouseReleased", x: 31, y: 41 }),
+      expect.objectContaining({ kind: "key", key: "0", modifiers: 2 }),
+    ]));
+    expect(agentOperations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "activate", tabId: 8 }),
+      expect.objectContaining({ type: "back", tabId: 8 }),
+      expect.objectContaining({ type: "forward", tabId: 8 }),
+      expect.objectContaining({ type: "duplicate", tabId: 8 }),
+      expect.objectContaining({ type: "pin", tabId: 8 }),
+      expect.objectContaining({ type: "mute", tabId: 8 }),
+      expect.objectContaining({ type: "close", tabId: 8 }),
+    ]));
+    expect(agent.getActivityLog().every((entry) => entry.status === "succeeded")).toBe(true);
+    client.dispose();
+  });
 });

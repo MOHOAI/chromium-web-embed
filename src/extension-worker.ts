@@ -18,7 +18,7 @@ import {
 
 declare const chrome: any;
 
-const EXTENSION_VERSION = "2.2.0";
+const EXTENSION_VERSION = "2.2.1";
 const WORKSPACES_KEY = "managedBrowserWorkspaces";
 const subscribers = new Map<number, string>();
 const attachedDebuggerTabs = new Set<number>();
@@ -251,11 +251,6 @@ function virtualKeyCode(key: string, code?: string): number | undefined {
   return undefined;
 }
 
-async function focusTabForInput(tabId: number): Promise<void> {
-  try { await chrome.debugger.sendCommand({ tabId }, "Page.bringToFront"); }
-  catch { /* Input is still attempted when Chrome does not expose bringToFront. */ }
-}
-
 async function dispatchInput(workspace: ManagedBrowserWorkspace, data: Record<string, unknown>): Promise<{ ok: true }> {
   if (!isRecord(data.input)) throw new TypeError("A valid input payload is required.");
   const tabId = assertOwnedTab(workspace, data.tabId);
@@ -267,7 +262,6 @@ async function dispatchInput(workspace: ManagedBrowserWorkspace, data: Record<st
     await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", { type: "mouseWheel", x: numberValue(input, "x"), y: numberValue(input, "y"), deltaX: numberValue(input, "deltaX", 0), deltaY: numberValue(input, "deltaY", 0) });
   } else if (input.kind === "key") {
     if (!["keyDown", "keyUp", "char"].includes(input.type) || typeof input.key !== "string" || input.key.length > 128) throw new TypeError("Invalid key input.");
-    await focusTabForInput(tabId);
     const keyCode = virtualKeyCode(input.key, input.code);
     await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", {
       type: input.type,
@@ -280,7 +274,6 @@ async function dispatchInput(workspace: ManagedBrowserWorkspace, data: Record<st
     });
   } else if (input.kind === "text") {
     if (typeof input.text !== "string" || input.text.length > 10_000) throw new TypeError("Text input must be at most 10000 characters.");
-    await focusTabForInput(tabId);
     await chrome.debugger.sendCommand({ tabId }, "Input.insertText", { text: input.text });
   } else throw new TypeError("Unsupported input event.");
   return { ok: true };

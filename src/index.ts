@@ -68,6 +68,12 @@ export type SharedTabViewerMetrics = {
   effectiveFps?: number;
   lastFrameAt?: number;
 };
+export type SharedTabContextMenuEvent = {
+  clientX: number;
+  clientY: number;
+  x: number;
+  y: number;
+};
 export type SharedTabViewerOptions = {
   /** responsive favors low-latency JPEG frames, balanced is the default, and sharp preserves text edges with PNG frames. */
   renderProfile?: SharedTabRenderProfile;
@@ -76,6 +82,8 @@ export type SharedTabViewerOptions = {
   pauseWhenHidden?: boolean;
   onError?: (error: Error) => void;
   onFrame?: (frame: SharedTabScreenshot) => void;
+  /** Receives a right-click in viewer and lets the embedding app render its own safe action menu. */
+  onContextMenu?: (event: SharedTabContextMenuEvent) => void;
 };
 
 type PendingRequest = { resolve: (value: unknown) => void; reject: (reason: Error) => void; timer: number };
@@ -377,6 +385,13 @@ export class SharedTabViewer {
     this.container.addEventListener("pointerdown", (event) => { event.preventDefault(); this.container.focus({ preventScroll: true }); send({ kind: "pointer", type: "mousePressed", ...point(event), button: button(event.button), clickCount: event.detail || 1 }); }, { signal });
     this.container.addEventListener("pointermove", (event) => { queueMove({ kind: "pointer", type: "mouseMoved", ...point(event), button: button(event.button) }); }, { signal });
     this.container.addEventListener("pointerup", (event) => { event.preventDefault(); send({ kind: "pointer", type: "mouseReleased", ...point(event), button: button(event.button), clickCount: event.detail || 1 }); }, { signal });
+    this.container.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.container.focus({ preventScroll: true });
+      const position = point(event);
+      this.options.onContextMenu?.({ clientX: event.clientX, clientY: event.clientY, ...position });
+    }, { signal });
     this.container.addEventListener("wheel", (event) => { event.preventDefault(); send({ kind: "wheel", ...point(event), deltaX: event.deltaX, deltaY: event.deltaY }); }, { passive: false, signal });
     this.container.addEventListener("compositionstart", () => { this.composing = true; }, { signal });
     this.container.addEventListener("compositionend", (event) => { this.composing = false; if (event.data) send({ kind: "text", text: event.data }); }, { signal });
@@ -409,7 +424,14 @@ export class ManagedBrowserAgent {
   execute(operation: AgentOperation): Promise<unknown> { return this.run(operation); }
   open(url: string, active = true): Promise<unknown> { return this.execute({ type: "open", url, active }); }
   navigate(tabId: number, url: string): Promise<unknown> { return this.execute({ type: "navigate", tabId, url }); }
+  activate(tabId: number): Promise<unknown> { return this.execute({ type: "activate", tabId }); }
   reload(tabId: number): Promise<unknown> { return this.execute({ type: "reload", tabId }); }
+  back(tabId: number): Promise<unknown> { return this.execute({ type: "back", tabId }); }
+  forward(tabId: number): Promise<unknown> { return this.execute({ type: "forward", tabId }); }
+  duplicate(tabId: number, active = true): Promise<unknown> { return this.execute({ type: "duplicate", tabId, active }); }
+  pin(tabId: number, pinned = true): Promise<unknown> { return this.execute({ type: "pin", tabId, pinned }); }
+  mute(tabId: number, muted = true): Promise<unknown> { return this.execute({ type: "mute", tabId, muted }); }
+  close(tabId: number): Promise<unknown> { return this.execute({ type: "close", tabId }); }
   snapshot(): Promise<ManagedWorkspaceSnapshot> { return this.client.workspaceSnapshot(); }
   observe(tabId?: number, options: AgentObserveOptions = {}): Promise<SharedTabScreenshot> { return this.client.screenshot(tabId, options); }
   type(text: string, tabId?: number): Promise<{ ok: true }> {
@@ -426,10 +448,40 @@ export class ManagedBrowserAgent {
   scroll(deltaY: number, deltaX = 0, tabId?: number, x = 0, y = 0): Promise<{ ok: true }> {
     return this.agentInput({ kind: "wheel", x, y, deltaX, deltaY }, tabId);
   }
+  scrollUp(amount = 520, tabId?: number, x = 0, y = 0): Promise<{ ok: true }> { return this.scroll(-Math.abs(amount), 0, tabId, x, y); }
+  scrollDown(amount = 520, tabId?: number, x = 0, y = 0): Promise<{ ok: true }> { return this.scroll(Math.abs(amount), 0, tabId, x, y); }
   click(x: number, y: number, tabId?: number): Promise<{ ok: true }> {
     return this.pointerSequence(x, y, 1, tabId);
   }
   doubleClick(x: number, y: number, tabId?: number): Promise<{ ok: true }> { return this.pointerSequence(x, y, 2, tabId); }
+  tripleClick(x: number, y: number, tabId?: number): Promise<{ ok: true }> { return this.pointerSequence(x, y, 3, tabId); }
+  rightClick(x: number, y: number, tabId?: number): Promise<{ ok: true }> { return this.pointerSequence(x, y, 1, tabId, "right"); }
+  hover(x: number, y: number, tabId?: number): Promise<{ ok: true }> { return this.agentInput({ kind: "pointer", type: "mouseMoved", x, y }, tabId); }
+  async drag(fromX: number, fromY: number, toX: number, toY: number, tabId?: number): Promise<{ ok: true }> {
+    await this.hover(fromX, fromY, tabId);
+    await this.agentInput({ kind: "pointer", type: "mousePressed", x: fromX, y: fromY, button: "left", clickCount: 1 }, tabId);
+    await this.hover(toX, toY, tabId);
+    return this.agentInput({ kind: "pointer", type: "mouseReleased", x: toX, y: toY, button: "left", clickCount: 1 }, tabId);
+  }
+  async longPress(x: number, y: number, durationMs = 600, tabId?: number): Promise<{ ok: true }> {
+    await this.agentInput({ kind: "pointer", type: "mousePressed", x, y, button: "left", clickCount: 1 }, tabId);
+    await this.wait(Math.max(120, Math.min(5_000, durationMs)));
+    return this.agentInput({ kind: "pointer", type: "mouseReleased", x, y, button: "left", clickCount: 1 }, tabId);
+  }
+  copy(tabId?: number): Promise<{ ok: true }> { return this.keySequence("c", { code: "KeyC", modifiers: 2 }, tabId); }
+  cut(tabId?: number): Promise<{ ok: true }> { return this.keySequence("x", { code: "KeyX", modifiers: 2 }, tabId); }
+  paste(text: string, tabId?: number): Promise<{ ok: true }> { return this.type(text, tabId); }
+  undo(tabId?: number): Promise<{ ok: true }> { return this.keySequence("z", { code: "KeyZ", modifiers: 2 }, tabId); }
+  redo(tabId?: number): Promise<{ ok: true }> { return this.keySequence("y", { code: "KeyY", modifiers: 2 }, tabId); }
+  find(tabId?: number): Promise<{ ok: true }> { return this.keySequence("f", { code: "KeyF", modifiers: 2 }, tabId); }
+  confirm(tabId?: number): Promise<{ ok: true }> { return this.press("Enter", { code: "Enter" }, tabId); }
+  cancel(tabId?: number): Promise<{ ok: true }> { return this.press("Escape", { code: "Escape" }, tabId); }
+  toggle(tabId?: number): Promise<{ ok: true }> { return this.press(" ", { code: "Space" }, tabId); }
+  save(tabId?: number): Promise<{ ok: true }> { return this.keySequence("s", { code: "KeyS", modifiers: 2 }, tabId); }
+  print(tabId?: number): Promise<{ ok: true }> { return this.keySequence("p", { code: "KeyP", modifiers: 2 }, tabId); }
+  zoomIn(tabId?: number): Promise<{ ok: true }> { return this.keySequence("+", { code: "Equal", modifiers: 2 }, tabId); }
+  zoomOut(tabId?: number): Promise<{ ok: true }> { return this.keySequence("-", { code: "Minus", modifiers: 2 }, tabId); }
+  resetZoom(tabId?: number): Promise<{ ok: true }> { return this.keySequence("0", { code: "Digit0", modifiers: 2 }, tabId); }
   wait(milliseconds: number): Promise<void> { return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Math.min(30_000, Math.round(milliseconds))))); }
   getActivityLog(): readonly AgentActivityEntry[] { return this.activity.map((entry) => ({ ...entry })); }
   clearActivityLog(): void { this.activity.splice(0); }
@@ -467,9 +519,9 @@ export class ManagedBrowserAgent {
     return this.agentInput({ kind: "key", type: "keyUp", key, ...options }, tabId);
   }
 
-  private async pointerSequence(x: number, y: number, clickCount: number, tabId?: number): Promise<{ ok: true }> {
-    await this.agentInput({ kind: "pointer", type: "mousePressed", x, y, button: "left", clickCount }, tabId);
-    return this.agentInput({ kind: "pointer", type: "mouseReleased", x, y, button: "left", clickCount }, tabId);
+  private async pointerSequence(x: number, y: number, clickCount: number, tabId?: number, button: "left" | "middle" | "right" = "left"): Promise<{ ok: true }> {
+    await this.agentInput({ kind: "pointer", type: "mousePressed", x, y, button, clickCount }, tabId);
+    return this.agentInput({ kind: "pointer", type: "mouseReleased", x, y, button, clickCount }, tabId);
   }
 }
 

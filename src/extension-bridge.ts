@@ -3,7 +3,7 @@ import { BRIDGE_CHANNEL, BRIDGE_VERSION, BridgeEvent, BridgeReady, isBridgeComma
 declare const chrome: any;
 
 const origin = window.location.origin;
-const extensionVersion = "2.2.0";
+const extensionVersion = "2.2.1";
 const bridgeGlobal = globalThis as typeof globalThis & { __realBrowserWebBridgeInstalled?: boolean };
 
 if (!bridgeGlobal.__realBrowserWebBridgeInstalled) {

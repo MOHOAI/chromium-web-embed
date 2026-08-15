@@ -108,7 +108,7 @@ function assertAgentControlEnabled(workspace) {
 }
 
 // src/extension-worker.ts
-var EXTENSION_VERSION = "2.2.0";
+var EXTENSION_VERSION = "2.2.1";
 var WORKSPACES_KEY = "managedBrowserWorkspaces";
 var subscribers = /* @__PURE__ */ new Map();
 var attachedDebuggerTabs = /* @__PURE__ */ new Set();
@@ -349,12 +349,6 @@ function virtualKeyCode(key, code) {
   if (/^[0-9]$/.test(key)) return key.charCodeAt(0);
   return void 0;
 }
-async function focusTabForInput(tabId) {
-  try {
-    await chrome.debugger.sendCommand({ tabId }, "Page.bringToFront");
-  } catch {
-  }
-}
 async function dispatchInput(workspace, data) {
   if (!isRecord(data.input)) throw new TypeError("A valid input payload is required.");
   const tabId = assertOwnedTab(workspace, data.tabId);
@@ -366,7 +360,6 @@ async function dispatchInput(workspace, data) {
     await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", { type: "mouseWheel", x: numberValue(input, "x"), y: numberValue(input, "y"), deltaX: numberValue(input, "deltaX", 0), deltaY: numberValue(input, "deltaY", 0) });
   } else if (input.kind === "key") {
     if (!["keyDown", "keyUp", "char"].includes(input.type) || typeof input.key !== "string" || input.key.length > 128) throw new TypeError("Invalid key input.");
-    await focusTabForInput(tabId);
     const keyCode = virtualKeyCode(input.key, input.code);
     await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", {
       type: input.type,
@@ -379,7 +372,6 @@ async function dispatchInput(workspace, data) {
     });
   } else if (input.kind === "text") {
     if (typeof input.text !== "string" || input.text.length > 1e4) throw new TypeError("Text input must be at most 10000 characters.");
-    await focusTabForInput(tabId);
     await chrome.debugger.sendCommand({ tabId }, "Input.insertText", { text: input.text });
   } else throw new TypeError("Unsupported input event.");
   return { ok: true };

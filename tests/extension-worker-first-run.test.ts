@@ -35,7 +35,7 @@ describe("managed workspace first-run discovery", () => {
     expect(response).toMatchObject({ requestId: "first-run", ok: true, result: { workspace: null } });
   });
 
-  it("focuses the managed tab and supplies native key codes for backspace and delete", async () => {
+  it("keeps the managed tab in the background and supplies native key codes for backspace and delete", async () => {
     const chromeMock = (globalThis as Record<string, any>).chrome;
     chromeMock.tabs.create.mockResolvedValue({ id: 8, url: "https://example.com/", title: "Example", active: true, windowId: 1, index: 0 });
     chromeMock.tabs.group.mockResolvedValue(15);
@@ -58,7 +58,7 @@ describe("managed workspace first-run discovery", () => {
     });
 
     expect(result).toMatchObject({ ok: true, result: { ok: true } });
-    expect(chromeMock.debugger.sendCommand).toHaveBeenCalledWith({ tabId: 8 }, "Page.bringToFront");
+    expect(chromeMock.debugger.sendCommand).not.toHaveBeenCalledWith({ tabId: 8 }, "Page.bringToFront");
     expect(chromeMock.debugger.sendCommand).toHaveBeenCalledWith(
       { tabId: 8 },
       "Input.dispatchKeyEvent",
