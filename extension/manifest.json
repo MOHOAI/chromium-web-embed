@@ -1,19 +1,20 @@
 {
   "manifest_version": 3,
   "name": "Real Browser Web Bridge",
-  "version": "1.1.0",
-  "description": "Shares a user-selected Chrome tab with approved web apps for local viewing and interaction.",
-  "permissions": ["tabs", "debugger"],
+  "version": "2.0.0",
+  "description": "Creates and controls isolated Chrome tab groups for approved web apps.",
+  "permissions": ["tabs", "tabGroups", "debugger", "scripting", "storage"],
+  "host_permissions": ["http://*/*", "https://*/*"],
   "background": { "service_worker": "service-worker.js", "type": "module" },
   "content_scripts": [
     {
-      "matches": ["http://localhost/*", "https://*.manus.computer/*", "https://*.manus.space/*"],
+      "matches": ["http://*/*", "https://*/*"],
       "js": ["bridge.js"],
       "run_at": "document_start"
     }
   ],
   "externally_connectable": {
-    "matches": ["http://localhost/*", "https://*.manus.computer/*", "https://*.manus.space/*"]
+    "matches": ["http://*/*", "https://*/*"]
   },
   "action": { "default_title": "Real Browser Web Bridge", "default_popup": "popup.html" }
 }

@@ -3,23 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>مشاركة تبويب</title>
+    <title>جسر متصفح موهو</title>
     <style>
       :root { color-scheme: dark; font-family: Arial, sans-serif; }
-      body { width: 330px; margin: 0; padding: 16px; background: #101722; color: #eef5fa; }
+      body { width: 340px; margin: 0; padding: 16px; background: #101722; color: #eef5fa; }
       h1 { margin: 0 0 6px; font-size: 16px; } p { color: #aebdca; font-size: 12px; line-height: 1.55; }
-      #tabs { display: grid; gap: 7px; max-height: 340px; overflow: auto; margin: 14px 0; }
-      button { width: 100%; border: 1px solid #2c4359; border-radius: 9px; background: #162535; color: inherit; cursor: pointer; padding: 10px; text-align: right; }
-      button:hover { border-color: #46c7ba; background: #173342; } button strong, button span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } button span { color: #91a6b7; font-size: 11px; margin-top: 4px; direction: ltr; text-align: left; }
-      #stop { border-color: #7f3d4a; color: #ffb9c2; } #status { min-height: 18px; color: #71d9c2; font-size: 12px; }
+      #status { min-height: 18px; color: #71d9c2; font-size: 12px; }
+      .card { margin-top: 10px; padding: 11px; border: 1px solid #2c4359; border-radius: 10px; background: #0d1925; color: #aebdca; font-size: 11px; line-height: 1.6; }
+      .card strong { color: #eef5fa; display: block; margin-bottom: 3px; font-size: 12px; }
+      button { width: 100%; margin-top: 12px; border: 1px solid #7f3d4a; border-radius: 9px; background: #20141b; color: #ffb9c2; cursor: pointer; padding: 10px; text-align: right; }
+      button:hover { background: #31202a; } button:disabled { cursor: wait; opacity: .65; }
     </style>
   </head>
   <body>
-    <h1>مشاركة تبويب حقيقي</h1>
-    <p>اختر تبويبًا لمشاركته مع تطبيق الويب المفتوح. تستطيع إيقاف المشاركة في أي وقت من هنا.</p>
-    <div id="status">يجري تحميل التبويبات…</div>
-    <div id="tabs"></div>
-    <button id="stop" type="button" hidden>إيقاف مشاركة التبويب</button>
+    <h1>جسر المتصفح المُدار</h1>
+    <p>لا تقرأ هذه الإضافة تبويباتك المفتوحة ولا تعرضها للتطبيق. ينشئ الموقع مساحة تبويبات مستقلة ومرئية داخل Chrome عند طلبك.</p>
+    <div id="status">يجري فحص صفحة التطبيق…</div>
+    <div id="bridge-status" class="card">افتح هذه النافذة فوق موقع التطبيق ليتحقق من اتصال الجسر.</div>
+    <div id="workspace-status" class="card"><strong>مساحة التطبيق</strong>لا توجد مساحة متصفح مُدارة لهذه الصفحة بعد.</div>
+    <button id="close-workspace" type="button" hidden>إغلاق مساحة التطبيق</button>
     <script type="module" src="popup.js"></script>
   </body>
 </html>

@@ -1,24 +1,24 @@
 // src/protocol.ts
-var BRIDGE_CHANNEL = "real-browser-web/v1";
-var BRIDGE_VERSION = 1;
+var BRIDGE_CHANNEL = "real-browser-web/v2";
+var BRIDGE_VERSION = 2;
 var TAB_ACTIONS = [
   "status",
   "subscribe",
-  "open",
-  "list",
-  "active",
-  "navigate",
-  "activate",
-  "reload",
-  "back",
-  "forward",
-  "close",
-  "pin",
-  "mute",
-  "shared",
-  "screenshot",
-  "input",
-  "stopShare"
+  "workspaceCreate",
+  "workspaceGet",
+  "workspaceList",
+  "workspaceOpen",
+  "workspaceNavigate",
+  "workspaceActivate",
+  "workspaceReload",
+  "workspaceBack",
+  "workspaceForward",
+  "workspaceCloseTab",
+  "workspaceClose",
+  "workspaceSetAgentControl",
+  "workspaceScreenshot",
+  "workspaceInput",
+  "agentExecute"
 ];
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -35,20 +35,26 @@ function isBridgeEvent(value) {
 
 // src/extension-bridge.ts
 var origin = window.location.origin;
-window.addEventListener("message", (event) => {
-  if (event.source !== window || event.origin !== origin || !isBridgeCommand(event.data)) return;
-  const command = event.data;
-  void chrome.runtime.sendMessage(command).then((message) => window.postMessage(message, origin)).catch(() => window.postMessage({
-    channel: BRIDGE_CHANNEL,
-    version: BRIDGE_VERSION,
-    kind: "response",
-    requestId: command.requestId,
-    ok: false,
-    error: "The browser extension is unavailable."
-  }, origin));
-});
-chrome.runtime.onMessage.addListener((message) => {
-  if (isBridgeEvent(message)) window.postMessage(message, origin);
-});
-window.postMessage({ channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "ready" }, origin);
+var extensionVersion = "1.2.0";
+var bridgeGlobal = globalThis;
+if (!bridgeGlobal.__realBrowserWebBridgeInstalled) {
+  bridgeGlobal.__realBrowserWebBridgeInstalled = true;
+  window.addEventListener("message", (event) => {
+    if (event.source !== window || event.origin !== origin || !isBridgeCommand(event.data)) return;
+    const command = event.data;
+    void chrome.runtime.sendMessage(command).then((message) => window.postMessage(message, origin)).catch(() => window.postMessage({
+      channel: BRIDGE_CHANNEL,
+      version: BRIDGE_VERSION,
+      kind: "response",
+      requestId: command.requestId,
+      ok: false,
+      error: "The browser extension is unavailable."
+    }, origin));
+  });
+  chrome.runtime.onMessage.addListener((message) => {
+    if (isBridgeEvent(message)) window.postMessage(message, origin);
+  });
+}
+var ready = { channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "ready", extensionVersion };
+window.postMessage(ready, origin);
 //# sourceMappingURL=extension-bridge.js.map

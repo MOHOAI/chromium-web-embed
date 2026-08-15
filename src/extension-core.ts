@@ -1,4 +1,7 @@
-import { BrowserTab, ExtensionStatus, TAB_ACTIONS, TabAction, isRecord, normalizeTabUrl } from "./protocol";
+import { BrowserTab, ExtensionStatus, TAB_ACTIONS, isRecord, normalizeTabUrl } from "./protocol";
+
+/** Internal helper actions retained for unit-testing Chrome tab adapter behavior. */
+export type LegacyTabAction = "open" | "list" | "active" | "navigate" | "activate" | "pin" | "mute" | "reload" | "close" | "back" | "forward";
 
 export type ChromeLikeTab = {
   id?: number;
@@ -76,12 +79,12 @@ function urlValue(data: unknown): string {
 }
 
 export function createExtensionStatus(version: string): ExtensionStatus {
-  return { available: true, version, capabilities: TAB_ACTIONS };
+  return { available: true, version, capabilities: TAB_ACTIONS, model: "managed-workspace" };
 }
 
 export async function handleTabAction(
   tabs: ChromeTabsAdapter,
-  action: Exclude<TabAction, "status" | "subscribe" | "shared" | "screenshot" | "input" | "stopShare">,
+  action: LegacyTabAction,
   data?: Record<string, unknown>,
 ): Promise<unknown> {
   if (action === "open") {
@@ -128,5 +131,5 @@ export async function handleTabAction(
     await tabs.goForward(id);
     return { ok: true };
   }
-  throw new Error(`Unsupported action: ${action satisfies never}`);
+  throw new Error(`Unsupported action: ${action}`);
 }

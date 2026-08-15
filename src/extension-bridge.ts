@@ -1,26 +1,33 @@
-import { BRIDGE_CHANNEL, BRIDGE_VERSION, BridgeEvent, isBridgeCommand, isBridgeEvent } from "./protocol";
+import { BRIDGE_CHANNEL, BRIDGE_VERSION, BridgeEvent, BridgeReady, isBridgeCommand, isBridgeEvent } from "./protocol";
 
 declare const chrome: any;
 
 const origin = window.location.origin;
+const extensionVersion = "1.2.0";
+const bridgeGlobal = globalThis as typeof globalThis & { __realBrowserWebBridgeInstalled?: boolean };
 
-window.addEventListener("message", (event: MessageEvent<unknown>) => {
-  if (event.source !== window || event.origin !== origin || !isBridgeCommand(event.data)) return;
-  const command = event.data;
-  void chrome.runtime.sendMessage(command)
-    .then((message: unknown) => window.postMessage(message, origin))
-    .catch(() => window.postMessage({
-      channel: BRIDGE_CHANNEL,
-      version: BRIDGE_VERSION,
-      kind: "response",
-      requestId: command.requestId,
-      ok: false,
-      error: "The browser extension is unavailable.",
-    }, origin));
-});
+if (!bridgeGlobal.__realBrowserWebBridgeInstalled) {
+  bridgeGlobal.__realBrowserWebBridgeInstalled = true;
 
-chrome.runtime.onMessage.addListener((message: unknown) => {
-  if (isBridgeEvent(message)) window.postMessage(message satisfies BridgeEvent, origin);
-});
+  window.addEventListener("message", (event: MessageEvent<unknown>) => {
+    if (event.source !== window || event.origin !== origin || !isBridgeCommand(event.data)) return;
+    const command = event.data;
+    void chrome.runtime.sendMessage(command)
+      .then((message: unknown) => window.postMessage(message, origin))
+      .catch(() => window.postMessage({
+        channel: BRIDGE_CHANNEL,
+        version: BRIDGE_VERSION,
+        kind: "response",
+        requestId: command.requestId,
+        ok: false,
+        error: "The browser extension is unavailable.",
+      }, origin));
+  });
 
-window.postMessage({ channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "ready" }, origin);
+  chrome.runtime.onMessage.addListener((message: unknown) => {
+    if (isBridgeEvent(message)) window.postMessage(message satisfies BridgeEvent, origin);
+  });
+}
+
+const ready: BridgeReady = { channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "ready", extensionVersion };
+window.postMessage(ready, origin);

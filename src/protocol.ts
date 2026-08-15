@@ -1,24 +1,24 @@
-export const BRIDGE_CHANNEL = "real-browser-web/v1";
-export const BRIDGE_VERSION = 1;
+export const BRIDGE_CHANNEL = "real-browser-web/v2";
+export const BRIDGE_VERSION = 2;
 
 export const TAB_ACTIONS = [
   "status",
   "subscribe",
-  "open",
-  "list",
-  "active",
-  "navigate",
-  "activate",
-  "reload",
-  "back",
-  "forward",
-  "close",
-  "pin",
-  "mute",
-  "shared",
-  "screenshot",
-  "input",
-  "stopShare",
+  "workspaceCreate",
+  "workspaceGet",
+  "workspaceList",
+  "workspaceOpen",
+  "workspaceNavigate",
+  "workspaceActivate",
+  "workspaceReload",
+  "workspaceBack",
+  "workspaceForward",
+  "workspaceCloseTab",
+  "workspaceClose",
+  "workspaceSetAgentControl",
+  "workspaceScreenshot",
+  "workspaceInput",
+  "agentExecute",
 ] as const;
 
 export type TabAction = (typeof TAB_ACTIONS)[number];
@@ -37,12 +37,26 @@ export type BrowserTab = {
   favIconUrl?: string;
 };
 
+/** A set of tabs created by the extension for one approved web-app origin. */
+export type ManagedBrowserWorkspace = {
+  id: string;
+  origin: string;
+  groupId: number | null;
+  label: string;
+  tabIds: number[];
+  activeTabId: number | null;
+  agentControlEnabled: boolean;
+  createdAt: number;
+};
+
 export type BrowserEvent =
-  | { type: "updated"; tab: BrowserTab }
-  | { type: "activated"; tab: BrowserTab }
-  | { type: "removed"; tabId: number }
-  | { type: "share-started"; tab: BrowserTab }
-  | { type: "share-stopped"; tabId: number; reason: string };
+  | { type: "workspace-created"; workspace: ManagedBrowserWorkspace; tab: BrowserTab }
+  | { type: "workspace-updated"; workspace: ManagedBrowserWorkspace }
+  | { type: "workspace-closed"; workspaceId: string; reason: string }
+  | { type: "workspace-tab-opened"; workspaceId: string; tab: BrowserTab }
+  | { type: "workspace-tab-updated"; workspaceId: string; tab: BrowserTab }
+  | { type: "workspace-tab-activated"; workspaceId: string; tab: BrowserTab }
+  | { type: "workspace-tab-removed"; workspaceId: string; tabId: number };
 
 export type SharedTabScreenshot = {
   tabId: number;
@@ -56,10 +70,22 @@ export type SharedTabInput =
   | { kind: "key"; type: "keyDown" | "keyUp" | "char"; key: string; code?: string; modifiers?: number }
   | { kind: "text"; text: string };
 
+export type AgentOperation =
+  | { type: "open"; url: string; active?: boolean }
+  | { type: "navigate"; tabId: number; url: string }
+  | { type: "activate"; tabId: number }
+  | { type: "reload"; tabId: number }
+  | { type: "back"; tabId: number }
+  | { type: "forward"; tabId: number }
+  | { type: "close"; tabId: number }
+  | { type: "screenshot"; tabId?: number }
+  | { type: "input"; tabId?: number; input: SharedTabInput };
+
 export type ExtensionStatus = {
   available: true;
   version: string;
   capabilities: readonly TabAction[];
+  model: "managed-workspace";
 };
 
 export type BridgeCommand = {
@@ -92,6 +118,7 @@ export type BridgeReady = {
   channel: typeof BRIDGE_CHANNEL;
   version: typeof BRIDGE_VERSION;
   kind: "ready";
+  extensionVersion: string;
 };
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -128,6 +155,14 @@ export function isBridgeEvent(value: unknown): value is BridgeEvent {
     && value.kind === "event"
     && isRecord(value.event)
     && typeof value.event.type === "string";
+}
+
+export function isBridgeReady(value: unknown): value is BridgeReady {
+  return isRecord(value)
+    && value.channel === BRIDGE_CHANNEL
+    && value.version === BRIDGE_VERSION
+    && value.kind === "ready"
+    && typeof value.extensionVersion === "string";
 }
 
 export function normalizeTabUrl(value: string): string {

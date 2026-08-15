@@ -1,24 +1,24 @@
 // src/protocol.ts
-var BRIDGE_CHANNEL = "real-browser-web/v1";
-var BRIDGE_VERSION = 1;
+var BRIDGE_CHANNEL = "real-browser-web/v2";
+var BRIDGE_VERSION = 2;
 var TAB_ACTIONS = [
   "status",
   "subscribe",
-  "open",
-  "list",
-  "active",
-  "navigate",
-  "activate",
-  "reload",
-  "back",
-  "forward",
-  "close",
-  "pin",
-  "mute",
-  "shared",
-  "screenshot",
-  "input",
-  "stopShare"
+  "workspaceCreate",
+  "workspaceGet",
+  "workspaceList",
+  "workspaceOpen",
+  "workspaceNavigate",
+  "workspaceActivate",
+  "workspaceReload",
+  "workspaceBack",
+  "workspaceForward",
+  "workspaceCloseTab",
+  "workspaceClose",
+  "workspaceSetAgentControl",
+  "workspaceScreenshot",
+  "workspaceInput",
+  "agentExecute"
 ];
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -63,178 +63,375 @@ function toBrowserTab(tab) {
     ...tab.favIconUrl ? { favIconUrl: tab.favIconUrl } : {}
   };
 }
-function record(data) {
-  return isRecord(data) ? data : {};
-}
-function tabId(data) {
-  const id = record(data).tabId;
-  if (!Number.isInteger(id)) throw new TypeError("A numeric tabId is required.");
-  return id;
-}
-function booleanValue(data, key, fallback) {
-  const value = record(data)[key];
-  if (value === void 0) return fallback;
-  if (typeof value !== "boolean") throw new TypeError(`${key} must be a boolean.`);
-  return value;
-}
-function numberValue(data, key) {
-  const value = record(data)[key];
-  if (value === void 0) return void 0;
-  if (!Number.isInteger(value)) throw new TypeError(`${key} must be an integer.`);
-  return value;
-}
-function urlValue(data) {
-  const value = record(data).url;
-  if (typeof value !== "string") throw new TypeError("A URL is required.");
-  return normalizeTabUrl(value);
-}
 function createExtensionStatus(version) {
-  return { available: true, version, capabilities: TAB_ACTIONS };
+  return { available: true, version, capabilities: TAB_ACTIONS, model: "managed-workspace" };
 }
-async function handleTabAction(tabs, action, data) {
-  if (action === "open") {
-    const tab = await tabs.create({
-      url: urlValue(data),
-      active: booleanValue(data, "active", true),
-      pinned: booleanValue(data, "pinned", false),
-      ...numberValue(data, "index") !== void 0 ? { index: numberValue(data, "index") } : {}
-    });
-    return { tab: toBrowserTab(tab) };
+
+// src/extension-bridge-policy.ts
+function isSupportedWebAppUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
   }
-  if (action === "list") {
-    const currentWindow = booleanValue(data, "currentWindow", true);
-    const tabsInWindow = await tabs.query(currentWindow ? { currentWindow: true } : {});
-    return { tabs: tabsInWindow.filter((tab) => Number.isInteger(tab.id)).map(toBrowserTab) };
+}
+
+// src/extension-bridge-activation.ts
+async function ensureSiteBridge(api, tabId) {
+  const tab = await api.tabs.get(tabId);
+  const url = tab.url ?? tab.pendingUrl ?? "";
+  if (!isSupportedWebAppUrl(url)) return { supported: false, injected: false, ready: false, url };
+  await api.scripting.executeScript({ target: { tabId }, files: ["bridge.js"], injectImmediately: true });
+  const probe = await api.scripting.executeScript({
+    target: { tabId },
+    func: () => Boolean(globalThis.__realBrowserWebBridgeInstalled),
+    injectImmediately: true
+  });
+  return { supported: true, injected: true, ready: probe[0]?.result === true, url };
+}
+
+// src/agent-control-policy.ts
+function assertAgentControlEnabled(workspace) {
+  if (!workspace.agentControlEnabled) {
+    throw new Error("Agent control is disabled for this workspace. The user must enable it first.");
   }
-  if (action === "active") {
-    const [active] = await tabs.query({ active: true, lastFocusedWindow: true });
-    return { tab: active && Number.isInteger(active.id) ? toBrowserTab(active) : null };
-  }
-  const id = tabId(data);
-  if (action === "navigate") return { tab: toBrowserTab(await tabs.update(id, { url: urlValue(data) })) };
-  if (action === "activate") return { tab: toBrowserTab(await tabs.update(id, { active: true })) };
-  if (action === "pin") return { tab: toBrowserTab(await tabs.update(id, { pinned: booleanValue(data, "pinned", true) })) };
-  if (action === "mute") return { tab: toBrowserTab(await tabs.update(id, { muted: booleanValue(data, "muted", true) })) };
-  if (action === "reload") {
-    await tabs.reload(id);
-    return { ok: true };
-  }
-  if (action === "close") {
-    await tabs.remove(id);
-    return { ok: true };
-  }
-  if (action === "back") {
-    if (!tabs.goBack) throw new Error("Back navigation is not supported by this Chrome version.");
-    await tabs.goBack(id);
-    return { ok: true };
-  }
-  if (action === "forward") {
-    if (!tabs.goForward) throw new Error("Forward navigation is not supported by this Chrome version.");
-    await tabs.goForward(id);
-    return { ok: true };
-  }
-  throw new Error(`Unsupported action: ${action}`);
 }
 
 // src/extension-worker.ts
-var EXTENSION_VERSION = "1.1.0";
-var subscriberTabIds = /* @__PURE__ */ new Set();
-var sharedTabId = null;
-function numberField(data, name, fallback) {
+var EXTENSION_VERSION = "2.0.0";
+var WORKSPACES_KEY = "managedBrowserWorkspaces";
+var subscribers = /* @__PURE__ */ new Map();
+var attachedDebuggerTabs = /* @__PURE__ */ new Set();
+var workspaces = /* @__PURE__ */ new Map();
+var restored = false;
+function safeOrigin(value) {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+function pageOrigin(sender) {
+  const origin = safeOrigin(sender.tab?.url ?? sender.tab?.pendingUrl);
+  if (!origin) throw new Error("Managed browser commands are allowed only from an approved HTTP(S) web page.");
+  return origin;
+}
+function workspaceId() {
+  return typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : `workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+function label(value) {
+  if (typeof value !== "string") return "\u0645\u0633\u0627\u062D\u0629 \u0645\u062A\u0635\u0641\u062D \u0627\u0644\u062A\u0637\u0628\u064A\u0642";
+  const normalized = value.trim().slice(0, 60);
+  return normalized || "\u0645\u0633\u0627\u062D\u0629 \u0645\u062A\u0635\u0641\u062D \u0627\u0644\u062A\u0637\u0628\u064A\u0642";
+}
+function numberValue(data, name, fallback) {
   const value = data[name] ?? fallback;
   if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError(`${name} must be a finite number.`);
   return value;
 }
-function sharedTab() {
-  if (!Number.isInteger(sharedTabId)) throw new Error("No tab is currently shared. Choose a tab from the extension popup first.");
-  return sharedTabId;
+function workspaceData(value) {
+  if (!isRecord(value)) throw new TypeError("A managed workspace payload is required.");
+  return value;
 }
-async function detachShared(reason) {
-  if (!Number.isInteger(sharedTabId)) return;
-  const tabId2 = sharedTabId;
-  sharedTabId = null;
+async function restoreWorkspaces() {
+  if (restored) return;
+  restored = true;
   try {
-    await chrome.debugger.detach({ tabId: tabId2 });
+    const stored = await chrome.storage.session.get(WORKSPACES_KEY);
+    const values = Array.isArray(stored?.[WORKSPACES_KEY]) ? stored[WORKSPACES_KEY] : [];
+    for (const candidate of values) {
+      if (!isRecord(candidate) || typeof candidate.id !== "string" || typeof candidate.origin !== "string" || !Array.isArray(candidate.tabIds)) continue;
+      const tabIds = candidate.tabIds.filter(Number.isInteger);
+      workspaces.set(candidate.id, {
+        id: candidate.id,
+        origin: candidate.origin,
+        groupId: typeof candidate.groupId === "number" ? candidate.groupId : null,
+        label: typeof candidate.label === "string" ? candidate.label : "\u0645\u0633\u0627\u062D\u0629 \u0645\u062A\u0635\u0641\u062D \u0627\u0644\u062A\u0637\u0628\u064A\u0642",
+        tabIds,
+        activeTabId: typeof candidate.activeTabId === "number" ? candidate.activeTabId : tabIds[0] ?? null,
+        agentControlEnabled: Boolean(candidate.agentControlEnabled),
+        createdAt: typeof candidate.createdAt === "number" ? candidate.createdAt : Date.now()
+      });
+    }
   } catch {
   }
-  await broadcast({ type: "share-stopped", tabId: tabId2, reason });
 }
-async function startSharing(tabId2) {
-  if (!Number.isInteger(tabId2)) throw new TypeError("Choose a valid tab before sharing.");
-  if (sharedTabId === tabId2) {
-    const tab2 = await chrome.tabs.get(tabId2);
-    return { tab: toBrowserTab(tab2) };
-  }
-  await detachShared("The user chose another tab.");
-  const tab = await chrome.tabs.get(tabId2);
-  const url = tab.url ?? tab.pendingUrl ?? "";
-  if (!/^https?:\/\//i.test(url)) throw new Error("Only regular HTTP or HTTPS pages can be shared.");
-  await chrome.debugger.attach({ tabId: tabId2 }, "1.3");
+async function persistWorkspaces() {
   try {
-    await chrome.debugger.sendCommand({ tabId: tabId2 }, "Page.enable");
-    sharedTabId = tabId2;
-    const browserTab = toBrowserTab(tab);
-    await broadcast({ type: "share-started", tab: browserTab });
-    return { tab: browserTab };
+    await chrome.storage.session.set({ [WORKSPACES_KEY]: [...workspaces.values()] });
+  } catch {
+  }
+}
+async function cleanWorkspace(workspace) {
+  const liveTabIds = [];
+  for (const tabId of workspace.tabIds) {
+    try {
+      await chrome.tabs.get(tabId);
+      liveTabIds.push(tabId);
+    } catch {
+      attachedDebuggerTabs.delete(tabId);
+    }
+  }
+  workspace.tabIds = liveTabIds;
+  if (!workspace.activeTabId || !liveTabIds.includes(workspace.activeTabId)) workspace.activeTabId = liveTabIds[0] ?? null;
+  if (liveTabIds.length === 0) workspaces.delete(workspace.id);
+  await persistWorkspaces();
+  return workspace;
+}
+async function findWorkspace(origin, value) {
+  await restoreWorkspaces();
+  const requestedId = isRecord(value) && typeof value.workspaceId === "string" ? value.workspaceId : void 0;
+  const candidates = [...workspaces.values()].filter((workspace2) => workspace2.origin === origin);
+  const workspace = requestedId ? candidates.find((candidate) => candidate.id === requestedId) : candidates[0];
+  return workspace ? cleanWorkspace(workspace) : null;
+}
+async function requireWorkspace(origin, data) {
+  const workspace = await findWorkspace(origin, data);
+  if (!workspace || workspace.tabIds.length === 0) throw new Error("No active managed workspace exists for this web application.");
+  return workspace;
+}
+function assertOwnedTab(workspace, candidate) {
+  const tabId = candidate ?? workspace.activeTabId;
+  if (!Number.isInteger(tabId) || !workspace.tabIds.includes(tabId)) throw new Error("This tab is not part of the current managed workspace.");
+  return tabId;
+}
+function matchingWorkspace(tabId) {
+  return [...workspaces.values()].find((workspace) => workspace.tabIds.includes(tabId)) ?? null;
+}
+function response(requestId, ok, result, error) {
+  return { channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "response", requestId, ok, ...ok ? { result } : { error } };
+}
+async function broadcast(workspace, event) {
+  const message = { channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "event", event };
+  await Promise.all([...subscribers.entries()].filter(([, origin]) => origin === workspace.origin).map(async ([tabId]) => {
+    try {
+      await chrome.tabs.sendMessage(tabId, message);
+    } catch {
+      subscribers.delete(tabId);
+    }
+  }));
+}
+async function groupTab(tabId, title) {
+  try {
+    const groupId = await chrome.tabs.group({ tabIds: [tabId] });
+    await chrome.tabGroups.update(groupId, { title, color: "blue", collapsed: false });
+    return groupId;
+  } catch {
+    return null;
+  }
+}
+async function ensureDebugger(tabId) {
+  if (attachedDebuggerTabs.has(tabId)) return;
+  await chrome.debugger.attach({ tabId }, "1.3");
+  try {
+    await chrome.debugger.sendCommand({ tabId }, "Page.enable");
+    attachedDebuggerTabs.add(tabId);
   } catch (error) {
     try {
-      await chrome.debugger.detach({ tabId: tabId2 });
+      await chrome.debugger.detach({ tabId });
     } catch {
     }
     throw error;
   }
 }
-async function captureScreenshot() {
-  const tabId2 = sharedTab();
-  const result = await chrome.debugger.sendCommand({ tabId: tabId2 }, "Page.captureScreenshot", { format: "jpeg", quality: 82, fromSurface: true });
-  if (!result || typeof result.data !== "string") throw new Error("Chrome did not return a screenshot.");
-  return { tabId: tabId2, dataUrl: `data:image/jpeg;base64,${result.data}`, capturedAt: Date.now() };
+async function createWorkspace(origin, data) {
+  const existing = await findWorkspace(origin);
+  if (existing && existing.tabIds.length > 0) {
+    const active = assertOwnedTab(existing, existing.activeTabId);
+    return { workspace: existing, tab: toBrowserTab(await chrome.tabs.get(active)) };
+  }
+  const url = typeof data.url === "string" ? normalizeTabUrl(data.url) : "https://www.google.com/";
+  const tab = await chrome.tabs.create({ url, active: true });
+  const tabId = tab.id;
+  if (!Number.isInteger(tabId)) throw new Error("Chrome did not create a tab identifier.");
+  const workspace = {
+    id: workspaceId(),
+    origin,
+    groupId: await groupTab(tabId, label(data.label)),
+    label: label(data.label),
+    tabIds: [tabId],
+    activeTabId: tabId,
+    agentControlEnabled: data.agentControl === true,
+    createdAt: Date.now()
+  };
+  workspaces.set(workspace.id, workspace);
+  await persistWorkspaces();
+  const browserTab = toBrowserTab(tab);
+  await broadcast(workspace, { type: "workspace-created", workspace, tab: browserTab });
+  return { workspace, tab: browserTab };
 }
-async function dispatchInput(data) {
-  if (!isRecord(data) || !isRecord(data.input)) throw new TypeError("A valid input payload is required.");
-  const tabId2 = sharedTab();
+async function openTab(workspace, data) {
+  if (typeof data.url !== "string") throw new TypeError("A URL is required.");
+  const tab = await chrome.tabs.create({ url: normalizeTabUrl(data.url), active: data.active !== false, ...workspace.groupId !== null ? { openerTabId: workspace.activeTabId ?? void 0 } : {} });
+  if (!Number.isInteger(tab.id)) throw new Error("Chrome did not create a tab identifier.");
+  if (workspace.groupId !== null) await chrome.tabs.group({ tabIds: [tab.id], groupId: workspace.groupId });
+  workspace.tabIds.push(tab.id);
+  if (data.active !== false) workspace.activeTabId = tab.id;
+  await persistWorkspaces();
+  const browserTab = toBrowserTab(tab);
+  await broadcast(workspace, { type: "workspace-tab-opened", workspaceId: workspace.id, tab: browserTab });
+  await broadcast(workspace, { type: "workspace-updated", workspace });
+  return { tab: browserTab, workspace };
+}
+async function captureScreenshot(workspace, data) {
+  const tabId = assertOwnedTab(workspace, data.tabId);
+  await ensureDebugger(tabId);
+  const result = await chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", { format: "jpeg", quality: 82, fromSurface: true });
+  if (!result || typeof result.data !== "string") throw new Error("Chrome did not return a screenshot.");
+  return { tabId, dataUrl: `data:image/jpeg;base64,${result.data}`, capturedAt: Date.now() };
+}
+async function dispatchInput(workspace, data) {
+  if (!isRecord(data.input)) throw new TypeError("A valid input payload is required.");
+  const tabId = assertOwnedTab(workspace, data.tabId);
+  await ensureDebugger(tabId);
   const input = data.input;
   if (input.kind === "pointer") {
-    await chrome.debugger.sendCommand({ tabId: tabId2 }, "Input.dispatchMouseEvent", { type: input.type, x: numberField(input, "x"), y: numberField(input, "y"), button: input.button ?? "none", clickCount: input.clickCount ?? 0 });
+    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", { type: input.type, x: numberValue(input, "x"), y: numberValue(input, "y"), button: input.button ?? "none", clickCount: input.clickCount ?? 0 });
   } else if (input.kind === "wheel") {
-    await chrome.debugger.sendCommand({ tabId: tabId2 }, "Input.dispatchMouseEvent", { type: "mouseWheel", x: numberField(input, "x"), y: numberField(input, "y"), deltaX: numberField(input, "deltaX", 0), deltaY: numberField(input, "deltaY", 0) });
+    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", { type: "mouseWheel", x: numberValue(input, "x"), y: numberValue(input, "y"), deltaX: numberValue(input, "deltaX", 0), deltaY: numberValue(input, "deltaY", 0) });
   } else if (input.kind === "key") {
     if (!["keyDown", "keyUp", "char"].includes(input.type) || typeof input.key !== "string" || input.key.length > 128) throw new TypeError("Invalid key input.");
-    await chrome.debugger.sendCommand({ tabId: tabId2 }, "Input.dispatchKeyEvent", { type: input.type, key: input.key, code: input.code, modifiers: input.modifiers ?? 0, text: input.type === "char" ? input.key : void 0 });
+    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", { type: input.type, key: input.key, code: input.code, modifiers: input.modifiers ?? 0, text: input.type === "char" ? input.key : void 0 });
   } else if (input.kind === "text") {
     if (typeof input.text !== "string" || input.text.length > 2e3) throw new TypeError("Text input must be at most 2000 characters.");
-    await chrome.debugger.sendCommand({ tabId: tabId2 }, "Input.insertText", { text: input.text });
-  } else {
-    throw new TypeError("Unsupported input event.");
-  }
+    await chrome.debugger.sendCommand({ tabId }, "Input.insertText", { text: input.text });
+  } else throw new TypeError("Unsupported input event.");
   return { ok: true };
 }
-function response(requestId, ok, result, error) {
-  return { channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "response", requestId, ok, ...ok ? { result } : { error } };
+async function closeTab(workspace, tabId) {
+  assertOwnedTab(workspace, tabId);
+  await chrome.tabs.remove(tabId);
+  attachedDebuggerTabs.delete(tabId);
+  workspace.tabIds = workspace.tabIds.filter((id) => id !== tabId);
+  if (workspace.activeTabId === tabId) workspace.activeTabId = workspace.tabIds[0] ?? null;
+  if (workspace.tabIds.length === 0) {
+    workspaces.delete(workspace.id);
+    await persistWorkspaces();
+    await broadcast(workspace, { type: "workspace-closed", workspaceId: workspace.id, reason: "The final managed tab was closed." });
+    return { ok: true, workspace: null };
+  }
+  await persistWorkspaces();
+  await broadcast(workspace, { type: "workspace-tab-removed", workspaceId: workspace.id, tabId });
+  await broadcast(workspace, { type: "workspace-updated", workspace });
+  return { ok: true, workspace };
 }
-async function broadcast(event) {
-  const message = { channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "event", event };
-  await Promise.all([...subscriberTabIds].map(async (tabId2) => {
+async function closeWorkspace(workspace) {
+  const ids = [...workspace.tabIds];
+  workspaces.delete(workspace.id);
+  await persistWorkspaces();
+  for (const tabId of ids) {
+    attachedDebuggerTabs.delete(tabId);
     try {
-      await chrome.tabs.sendMessage(tabId2, message);
+      await chrome.debugger.detach({ tabId });
     } catch {
-      subscriberTabIds.delete(tabId2);
     }
-  }));
+  }
+  if (ids.length) await chrome.tabs.remove(ids).catch(() => void 0);
+  await broadcast(workspace, { type: "workspace-closed", workspaceId: workspace.id, reason: "The web application closed its managed workspace." });
+  return { ok: true };
+}
+async function runAgent(workspace, operation) {
+  assertAgentControlEnabled(workspace);
+  if (!isRecord(operation) || typeof operation.type !== "string") throw new TypeError("A valid agent operation is required.");
+  if (operation.type === "open") return openTab(workspace, { url: normalizeTabUrl(operation.url), active: operation.active ?? true });
+  if (operation.type === "navigate") {
+    const tabId = assertOwnedTab(workspace, operation.tabId);
+    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { url: normalizeTabUrl(operation.url) })) };
+  }
+  if (operation.type === "activate") {
+    const tabId = assertOwnedTab(workspace, operation.tabId);
+    workspace.activeTabId = tabId;
+    await persistWorkspaces();
+    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { active: true })) };
+  }
+  if (operation.type === "reload") {
+    const tabId = assertOwnedTab(workspace, operation.tabId);
+    await chrome.tabs.reload(tabId);
+    return { ok: true };
+  }
+  if (operation.type === "back") {
+    const tabId = assertOwnedTab(workspace, operation.tabId);
+    await chrome.tabs.goBack(tabId);
+    return { ok: true };
+  }
+  if (operation.type === "forward") {
+    const tabId = assertOwnedTab(workspace, operation.tabId);
+    await chrome.tabs.goForward(tabId);
+    return { ok: true };
+  }
+  if (operation.type === "close") return closeTab(workspace, assertOwnedTab(workspace, operation.tabId));
+  if (operation.type === "screenshot") return captureScreenshot(workspace, { tabId: operation.tabId });
+  if (operation.type === "input") return dispatchInput(workspace, { tabId: operation.tabId, input: operation.input });
+  throw new Error("Unsupported agent operation.");
+}
+async function handleWorkspaceAction(origin, action, data) {
+  const payload = workspaceData(data);
+  if (action === "workspaceCreate") return createWorkspace(origin, payload);
+  const workspace = await requireWorkspace(origin, payload);
+  if (action === "workspaceGet") return { workspace };
+  if (action === "workspaceList") {
+    const tabs = [];
+    for (const tabId of workspace.tabIds) {
+      try {
+        tabs.push(toBrowserTab(await chrome.tabs.get(tabId)));
+      } catch {
+      }
+    }
+    return { workspace, tabs };
+  }
+  if (action === "workspaceOpen") return openTab(workspace, payload);
+  if (action === "workspaceNavigate") {
+    const tabId = assertOwnedTab(workspace, payload.tabId);
+    if (typeof payload.url !== "string") throw new TypeError("A URL is required.");
+    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { url: normalizeTabUrl(payload.url) })) };
+  }
+  if (action === "workspaceActivate") {
+    const tabId = assertOwnedTab(workspace, payload.tabId);
+    workspace.activeTabId = tabId;
+    await persistWorkspaces();
+    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { active: true })) };
+  }
+  if (action === "workspaceReload") {
+    await chrome.tabs.reload(assertOwnedTab(workspace, payload.tabId));
+    return { ok: true };
+  }
+  if (action === "workspaceBack") {
+    await chrome.tabs.goBack(assertOwnedTab(workspace, payload.tabId));
+    return { ok: true };
+  }
+  if (action === "workspaceForward") {
+    await chrome.tabs.goForward(assertOwnedTab(workspace, payload.tabId));
+    return { ok: true };
+  }
+  if (action === "workspaceCloseTab") return closeTab(workspace, assertOwnedTab(workspace, payload.tabId));
+  if (action === "workspaceClose") return closeWorkspace(workspace);
+  if (action === "workspaceSetAgentControl") {
+    if (typeof payload.enabled !== "boolean") throw new TypeError("enabled must be a boolean.");
+    workspace.agentControlEnabled = payload.enabled;
+    await persistWorkspaces();
+    await broadcast(workspace, { type: "workspace-updated", workspace });
+    return { workspace };
+  }
+  if (action === "workspaceScreenshot") return captureScreenshot(workspace, payload);
+  if (action === "workspaceInput") return dispatchInput(workspace, payload);
+  if (action === "agentExecute") return runAgent(workspace, payload.operation);
+  throw new Error("Unsupported managed workspace action.");
 }
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (isRecord(message) && message.scope === "real-browser-popup") {
     void (async () => {
       try {
-        if (message.action === "list-tabs") {
-          const tabs = (await chrome.tabs.query({ currentWindow: true })).filter((tab) => Number.isInteger(tab.id)).map(toBrowserTab);
-          return { ok: true, tabs, sharedTabId };
-        }
-        if (message.action === "share" && Number.isInteger(message.tabId)) return { ok: true, ...await startSharing(message.tabId) };
-        if (message.action === "stop-share") {
-          await detachShared("The user stopped sharing from the extension.");
-          return { ok: true };
-        }
+        if (!Number.isInteger(message.tabId)) throw new Error("Open the extension on an HTTP(S) web application page.");
+        const popupTab = await chrome.tabs.get(message.tabId);
+        const origin = safeOrigin(popupTab.url ?? popupTab.pendingUrl);
+        if (!origin) throw new Error("Managed workspaces are available only for regular HTTP(S) web pages.");
+        const workspace = await findWorkspace(origin);
+        if (message.action === "workspace-status") return { ok: true, workspace };
+        if (message.action === "close-workspace") return workspace ? await closeWorkspace(workspace) : { ok: true };
+        if (message.action === "ensure-site-bridge" && Number.isInteger(message.tabId)) return { ok: true, ...await ensureSiteBridge(chrome, message.tabId) };
         throw new Error("Unsupported popup action.");
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : "The extension could not complete the request." };
@@ -245,51 +442,55 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!isBridgeCommand(message)) return;
   void (async () => {
     try {
-      if (message.action === "status") return response(message.requestId, true, createExtensionStatus(EXTENSION_VERSION));
+      const origin = pageOrigin(sender);
+      if (message.action === "status") return response(message.requestId, true, { ...createExtensionStatus(EXTENSION_VERSION), model: "managed-workspace" });
       if (message.action === "subscribe") {
         const siteTabId = sender.tab?.id;
         if (!Number.isInteger(siteTabId)) throw new Error("Subscriptions are only allowed from an approved web page.");
-        subscriberTabIds.add(siteTabId);
+        subscribers.set(siteTabId, origin);
         return response(message.requestId, true, { subscribed: true });
       }
-      if (message.action === "shared") {
-        const tab = Number.isInteger(sharedTabId) ? toBrowserTab(await chrome.tabs.get(sharedTabId)) : null;
-        return response(message.requestId, true, { tab });
-      }
-      if (message.action === "screenshot") return response(message.requestId, true, await captureScreenshot());
-      if (message.action === "input") return response(message.requestId, true, await dispatchInput(message.data));
-      if (message.action === "stopShare") {
-        await detachShared("The web application stopped sharing.");
-        return response(message.requestId, true, { ok: true });
-      }
-      const result = await handleTabAction(chrome.tabs, message.action, message.data);
-      return response(message.requestId, true, result);
+      return response(message.requestId, true, await handleWorkspaceAction(origin, message.action, message.data));
     } catch (error) {
       return response(message.requestId, false, void 0, error instanceof Error ? error.message : "The extension could not complete the command.");
     }
   })().then(sendResponse);
   return true;
 });
-chrome.tabs.onUpdated.addListener(async (tabId2, _changeInfo, tab) => {
-  if (!Number.isInteger(tab.id)) return;
-  await broadcast({ type: "updated", tab: toBrowserTab(tab) });
+chrome.tabs.onUpdated.addListener(async (tabId, _changeInfo, tab) => {
+  await restoreWorkspaces();
+  const workspace = matchingWorkspace(tabId);
+  if (workspace && Number.isInteger(tab.id)) await broadcast(workspace, { type: "workspace-tab-updated", workspaceId: workspace.id, tab: toBrowserTab(tab) });
 });
-chrome.tabs.onActivated.addListener(async ({ tabId: tabId2 }) => {
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  await restoreWorkspaces();
+  const workspace = matchingWorkspace(tabId);
+  if (!workspace) return;
   try {
-    const tab = await chrome.tabs.get(tabId2);
-    await broadcast({ type: "activated", tab: toBrowserTab(tab) });
+    workspace.activeTabId = tabId;
+    await persistWorkspaces();
+    await broadcast(workspace, { type: "workspace-tab-activated", workspaceId: workspace.id, tab: toBrowserTab(await chrome.tabs.get(tabId)) });
   } catch {
   }
 });
-chrome.tabs.onRemoved.addListener(async (tabId2) => {
-  if (sharedTabId === tabId2) await detachShared("The shared tab was closed.");
-  await broadcast({ type: "removed", tabId: tabId2 });
-});
-chrome.debugger.onDetach.addListener(async (source, reason) => {
-  if (source.tabId === sharedTabId) {
-    const tabId2 = sharedTabId;
-    sharedTabId = null;
-    await broadcast({ type: "share-stopped", tabId: tabId2, reason });
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  await restoreWorkspaces();
+  const workspace = matchingWorkspace(tabId);
+  attachedDebuggerTabs.delete(tabId);
+  if (!workspace) return;
+  workspace.tabIds = workspace.tabIds.filter((id) => id !== tabId);
+  if (workspace.activeTabId === tabId) workspace.activeTabId = workspace.tabIds[0] ?? null;
+  if (workspace.tabIds.length === 0) {
+    workspaces.delete(workspace.id);
+    await persistWorkspaces();
+    await broadcast(workspace, { type: "workspace-closed", workspaceId: workspace.id, reason: "The final managed tab was closed." });
+  } else {
+    await persistWorkspaces();
+    await broadcast(workspace, { type: "workspace-tab-removed", workspaceId: workspace.id, tabId });
+    await broadcast(workspace, { type: "workspace-updated", workspace });
   }
+});
+chrome.debugger.onDetach.addListener((source) => {
+  if (Number.isInteger(source.tabId)) attachedDebuggerTabs.delete(source.tabId);
 });
 //# sourceMappingURL=extension-worker.js.map

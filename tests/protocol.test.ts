@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BRIDGE_CHANNEL, BRIDGE_VERSION, isBridgeCommand, normalizeTabUrl } from "../src/protocol";
+import { BRIDGE_CHANNEL, BRIDGE_VERSION, isBridgeCommand, isBridgeReady, normalizeTabUrl } from "../src/protocol";
 
 describe("browser bridge protocol", () => {
   it("normalizes HTTP and HTTPS tab URLs", () => {
@@ -18,10 +18,15 @@ describe("browser bridge protocol", () => {
       version: BRIDGE_VERSION,
       kind: "command",
       requestId: "request-1",
-      action: "open",
+      action: "workspaceCreate",
       data: { url: "https://example.com" },
     })).toBe(true);
-    expect(isBridgeCommand({ channel: BRIDGE_CHANNEL, version: 99, kind: "command", requestId: "request-1", action: "open" })).toBe(false);
+    expect(isBridgeCommand({ channel: BRIDGE_CHANNEL, version: 99, kind: "command", requestId: "request-1", action: "workspaceCreate" })).toBe(false);
     expect(isBridgeCommand({ channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "command", requestId: "request-1", action: "evaluate" })).toBe(false);
+  });
+
+  it("recognizes a versioned bridge-ready handshake with an extension version", () => {
+    expect(isBridgeReady({ channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "ready", extensionVersion: "1.2.0" })).toBe(true);
+    expect(isBridgeReady({ channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "ready" })).toBe(false);
   });
 });

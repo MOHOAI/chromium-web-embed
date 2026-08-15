@@ -1,7 +1,7 @@
 {
   "name": "chromium-web-embed",
-  "version": "1.1.0",
-  "description": "Share a user-selected real Chrome tab with an approved web app for local viewing and interaction.",
+  "version": "2.0.0",
+  "description": "Create and control isolated Chrome tab groups for approved web apps.",
   "license": "MIT",
   "type": "module",
   "engines": {
