@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head><meta charset="utf-8"><title>قيد انتظار إضافة Moho</title></head>
+  <body>
+    <output id="result">قيد انتظار رسالة جاهزية الإضافة…</output>
+    <script>
+      const channel = "real-browser-web/v2";
+      const result = document.querySelector("#result");
+      const request = (action, data) => new Promise((resolve, reject) => {
+        const requestId = `manual-${action}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const timeout = setTimeout(() => reject(new Error(`Timeout while calling ${action}`)), 5000);
+        const receive = (event) => {
+          const message = event.data;
+          if (event.source !== window || event.origin !== window.location.origin || message?.channel !== channel || message?.kind !== "response" || message?.requestId !== requestId) return;
+          window.removeEventListener("message", receive);
+          clearTimeout(timeout);
+          message.ok ? resolve(message.result) : reject(new Error(message.error || "Unknown extension error"));
+        };
+        window.addEventListener("message", receive);
+        window.postMessage({ channel, version: 2, kind: "command", requestId, action, data }, window.location.origin);
+      });
+      window.addEventListener("message", async (event) => {
+        const message = event.data;
+        if (event.source !== window || event.origin !== window.location.origin || message?.channel !== channel || message?.kind !== "ready") return;
+        try {
+          const current = await request("workspaceGet", {});
+          const created = current.workspace ?? (await request("workspaceCreate", { label: "Moho local verification", url: "https://example.com" })).workspace;
+          result.textContent = `PASS: extension=${message.extensionVersion}; workspace=${created.id}`;
+          document.title = "PASS: Moho extension";
+        } catch (error) {
+          result.textContent = `FAIL: ${error instanceof Error ? error.message : String(error)}`;
+          document.title = "FAIL: Moho extension";
+        }
+      });
+    </script>
+  </body>
+</html>

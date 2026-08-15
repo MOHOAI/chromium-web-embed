@@ -103,7 +103,7 @@ function assertAgentControlEnabled(workspace) {
 }
 
 // src/extension-worker.ts
-var EXTENSION_VERSION = "2.1.1";
+var EXTENSION_VERSION = "2.1.2";
 var WORKSPACES_KEY = "managedBrowserWorkspaces";
 var subscribers = /* @__PURE__ */ new Map();
 var attachedDebuggerTabs = /* @__PURE__ */ new Set();
@@ -395,9 +395,9 @@ async function runAgent(workspace, operation) {
   throw new Error("Unsupported agent operation.");
 }
 async function handleWorkspaceAction(origin, action, data) {
+  if (action === "workspaceGet") return { workspace: await findWorkspace(origin, data) };
   const payload = workspaceData(data);
   if (action === "workspaceCreate") return createWorkspace(origin, payload);
-  if (action === "workspaceGet") return { workspace: await findWorkspace(origin, payload) };
   const workspace = await requireWorkspace(origin, payload);
   if (action === "workspaceList") {
     const tabs = [];

@@ -39,21 +39,28 @@ function isBridgeEvent(value) {
 
 // src/extension-bridge.ts
 var origin = window.location.origin;
-var extensionVersion = "2.1.1";
+var extensionVersion = "2.1.2";
 var bridgeGlobal = globalThis;
 if (!bridgeGlobal.__realBrowserWebBridgeInstalled) {
   bridgeGlobal.__realBrowserWebBridgeInstalled = true;
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.origin !== origin || !isBridgeCommand(event.data)) return;
     const command = event.data;
-    void chrome.runtime.sendMessage(command).then((message) => window.postMessage(message, origin)).catch(() => window.postMessage({
-      channel: BRIDGE_CHANNEL,
-      version: BRIDGE_VERSION,
-      kind: "response",
-      requestId: command.requestId,
-      ok: false,
-      error: "The browser extension is unavailable."
-    }, origin));
+    chrome.runtime.sendMessage(command, (message) => {
+      const error = chrome.runtime.lastError;
+      if (error || !message) {
+        window.postMessage({
+          channel: BRIDGE_CHANNEL,
+          version: BRIDGE_VERSION,
+          kind: "response",
+          requestId: command.requestId,
+          ok: false,
+          error: error?.message ?? "The browser extension is unavailable."
+        }, origin);
+        return;
+      }
+      window.postMessage(message, origin);
+    });
   });
   chrome.runtime.onMessage.addListener((message) => {
     if (isBridgeEvent(message)) window.postMessage(message, origin);
