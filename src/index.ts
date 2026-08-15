@@ -8,6 +8,7 @@ import {
   BridgeResponse,
   ExtensionStatus,
   ManagedBrowserWorkspace,
+  ManagedWorkspaceSnapshot,
   SharedTabInput,
   SharedTabScreenshot,
   TabAction,
@@ -26,6 +27,7 @@ export {
   type BrowserTab,
   type ExtensionStatus,
   type ManagedBrowserWorkspace,
+  type ManagedWorkspaceSnapshot,
   type SharedTabInput,
   type SharedTabScreenshot,
   type TabAction,
@@ -112,6 +114,10 @@ export class RealBrowserClient {
   }
 
   listWorkspaceTabs(): Promise<{ workspace: ManagedBrowserWorkspace; tabs: BrowserTab[] }> { return this.request("workspaceList", this.workspaceData()); }
+  async workspaceSnapshot(): Promise<ManagedWorkspaceSnapshot> {
+    const { workspace, tabs } = await this.listWorkspaceTabs();
+    return { workspace, tabs, capturedAt: Date.now() };
+  }
   openInWorkspace(url: string, options: WorkspaceOpenOptions = {}): Promise<{ tab: BrowserTab; workspace: ManagedBrowserWorkspace }> {
     return this.request("workspaceOpen", { ...this.workspaceData(), url: normalizeTabUrl(url), active: options.active ?? true });
   }
@@ -120,6 +126,12 @@ export class RealBrowserClient {
   reloadInWorkspace(tabId?: number): Promise<{ ok: true }> { return this.request("workspaceReload", { ...this.workspaceData(), ...(tabId ? { tabId } : {}) }); }
   backInWorkspace(tabId?: number): Promise<{ ok: true }> { return this.request("workspaceBack", { ...this.workspaceData(), ...(tabId ? { tabId } : {}) }); }
   forwardInWorkspace(tabId?: number): Promise<{ ok: true }> { return this.request("workspaceForward", { ...this.workspaceData(), ...(tabId ? { tabId } : {}) }); }
+  renameWorkspace(label: string): Promise<{ workspace: ManagedBrowserWorkspace }> { return this.request("workspaceRename", { ...this.workspaceData(), label }); }
+  pinWorkspaceTab(tabId: number, pinned = true): Promise<{ tab: BrowserTab }> { return this.request("workspacePinTab", { ...this.workspaceData(), tabId, pinned }); }
+  muteWorkspaceTab(tabId: number, muted = true): Promise<{ tab: BrowserTab }> { return this.request("workspaceMuteTab", { ...this.workspaceData(), tabId, muted }); }
+  duplicateWorkspaceTab(tabId: number, options: WorkspaceOpenOptions = {}): Promise<{ tab: BrowserTab; workspace: ManagedBrowserWorkspace }> {
+    return this.request("workspaceDuplicateTab", { ...this.workspaceData(), tabId, active: options.active ?? true });
+  }
   closeWorkspaceTab(tabId: number): Promise<{ ok: true; workspace: ManagedBrowserWorkspace | null }> { return this.request("workspaceCloseTab", { ...this.workspaceData(), tabId }); }
   async closeWorkspace(): Promise<{ ok: true }> { const result = await this.request<{ ok: true }>("workspaceClose", this.workspaceData()); this.workspaceId = undefined; return result; }
   setAgentControl(enabled: boolean): Promise<{ workspace: ManagedBrowserWorkspace }> { return this.request("workspaceSetAgentControl", { ...this.workspaceData(), enabled }); }
@@ -223,6 +235,10 @@ export class ManagedBrowserAgent {
   constructor(private readonly client: RealBrowserClient) {}
 
   execute(operation: AgentOperation): Promise<unknown> { return this.client.agentExecute(operation); }
+  open(url: string, active = true): Promise<unknown> { return this.execute({ type: "open", url, active }); }
+  navigate(tabId: number, url: string): Promise<unknown> { return this.execute({ type: "navigate", tabId, url }); }
+  reload(tabId: number): Promise<unknown> { return this.execute({ type: "reload", tabId }); }
+  snapshot(): Promise<ManagedWorkspaceSnapshot> { return this.client.workspaceSnapshot(); }
   observe(tabId?: number): Promise<SharedTabScreenshot> { return this.client.screenshot(tabId); }
   type(text: string, tabId?: number): Promise<{ ok: true }> { return this.client.agentExecute({ type: "input", ...(tabId ? { tabId } : {}), input: { kind: "text", text } }) as Promise<{ ok: true }>; }
   click(x: number, y: number, tabId?: number): Promise<{ ok: true }> {

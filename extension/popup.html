@@ -7,20 +7,28 @@
     <style>
       :root { color-scheme: dark; font-family: Arial, sans-serif; }
       body { width: 340px; margin: 0; padding: 16px; background: #101722; color: #eef5fa; }
-      h1 { margin: 0 0 6px; font-size: 16px; } p { color: #aebdca; font-size: 12px; line-height: 1.55; }
+      .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+      .brand img { width: 36px; height: 36px; border-radius: 10px; box-shadow: 0 6px 18px rgba(65, 167, 255, .25); }
+      h1 { margin: 0 0 2px; font-size: 16px; } .brand span { color: #7ddbc7; font-size: 10px; } p { color: #aebdca; font-size: 12px; line-height: 1.55; }
       #status { min-height: 18px; color: #71d9c2; font-size: 12px; }
       .card { margin-top: 10px; padding: 11px; border: 1px solid #2c4359; border-radius: 10px; background: #0d1925; color: #aebdca; font-size: 11px; line-height: 1.6; }
       .card strong { color: #eef5fa; display: block; margin-bottom: 3px; font-size: 12px; }
+      .agent-status { display: inline-flex; align-items: center; margin-top: 7px; padding: 3px 7px; border: 1px solid #3b5268; border-radius: 999px; background: #142231; color: #cbd8e3; font-size: 10px; font-weight: 700; }
+      .agent-status[data-state="enabled"] { border-color: #2d8c70; background: #123529; color: #8ae7cc; }
+      .agent-status[data-state="disabled"] { border-color: #72545a; background: #2a1d22; color: #ffb9c2; }
       button { width: 100%; margin-top: 12px; border: 1px solid #7f3d4a; border-radius: 9px; background: #20141b; color: #ffb9c2; cursor: pointer; padding: 10px; text-align: right; }
       button:hover { background: #31202a; } button:disabled { cursor: wait; opacity: .65; }
     </style>
   </head>
   <body>
-    <h1>جسر المتصفح المُدار</h1>
+    <div class="brand">
+      <img src="icons/icon-48.png" alt="أيقونة جسر متصفح موهو" />
+      <div><h1>جسر المتصفح المُدار</h1><span>مساحة معزولة حسب أصل التطبيق</span></div>
+    </div>
     <p>لا تقرأ هذه الإضافة تبويباتك المفتوحة ولا تعرضها للتطبيق. ينشئ الموقع مساحة تبويبات مستقلة ومرئية داخل Chrome عند طلبك.</p>
     <div id="status">يجري فحص صفحة التطبيق…</div>
     <div id="bridge-status" class="card">افتح هذه النافذة فوق موقع التطبيق ليتحقق من اتصال الجسر.</div>
-    <div id="workspace-status" class="card"><strong>مساحة التطبيق</strong>لا توجد مساحة متصفح مُدارة لهذه الصفحة بعد.</div>
+    <div id="workspace-status" class="card"><strong>مساحة التطبيق والوكيل</strong><span id="agent-status" class="agent-status" data-state="unknown">صلاحية الوكيل: قيد الفحص</span><div id="workspace-detail">لا توجد مساحة متصفح مُدارة لهذه الصفحة بعد. لا تُنفَّذ أوامر الوكيل إلا داخل المجموعة التي أنشأها التطبيق وبعد تفعيلك الصريح لها.</div></div>
     <button id="close-workspace" type="button" hidden>إغلاق مساحة التطبيق</button>
     <script type="module" src="popup.js"></script>
   </body>

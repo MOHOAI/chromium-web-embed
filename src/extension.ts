@@ -3,6 +3,7 @@ export type ExtensionManifestOptions = {
   name?: string;
   version?: string;
   description?: string;
+  icons?: Partial<Record<16 | 32 | 48 | 128, string>>;
 };
 
 /**
@@ -21,7 +22,7 @@ export function createRealBrowserExtensionManifest(options: ExtensionManifestOpt
   return {
     manifest_version: 3,
     name: options.name ?? "Real Browser Web Bridge",
-    version: options.version ?? "2.0.0",
+    version: options.version ?? "2.1.0",
     description: options.description ?? "Lets approved web apps create and control isolated, user-visible Chrome tab groups.",
     permissions: ["tabs", "tabGroups", "debugger", "scripting", "storage"],
     host_permissions: [...options.allowedOrigins],
@@ -32,6 +33,11 @@ export function createRealBrowserExtensionManifest(options: ExtensionManifestOpt
       run_at: "document_start",
     }],
     externally_connectable: { matches: [...options.allowedOrigins] },
-    action: { default_title: options.name ?? "Real Browser Web Bridge", default_popup: "popup.html" },
+    icons: options.icons ?? { 16: "icons/icon-16.png", 32: "icons/icon-32.png", 48: "icons/icon-48.png", 128: "icons/icon-128.png" },
+    action: {
+      default_title: options.name ?? "Real Browser Web Bridge",
+      default_popup: "popup.html",
+      default_icon: options.icons ?? { 16: "icons/icon-16.png", 32: "icons/icon-32.png", 48: "icons/icon-48.png", 128: "icons/icon-128.png" },
+    },
   } as const;
 }

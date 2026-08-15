@@ -13,6 +13,10 @@ var TAB_ACTIONS = [
   "workspaceReload",
   "workspaceBack",
   "workspaceForward",
+  "workspaceRename",
+  "workspacePinTab",
+  "workspaceMuteTab",
+  "workspaceDuplicateTab",
   "workspaceCloseTab",
   "workspaceClose",
   "workspaceSetAgentControl",
@@ -64,7 +68,7 @@ function toBrowserTab(tab) {
   };
 }
 function createExtensionStatus(version) {
-  return { available: true, version, capabilities: TAB_ACTIONS, model: "managed-workspace" };
+  return { available: true, version, capabilities: TAB_ACTIONS, model: "managed-workspace", privacy: "origin-isolated" };
 }
 
 // src/extension-bridge-policy.ts
@@ -99,7 +103,7 @@ function assertAgentControlEnabled(workspace) {
 }
 
 // src/extension-worker.ts
-var EXTENSION_VERSION = "2.0.0";
+var EXTENSION_VERSION = "2.1.0";
 var WORKSPACES_KEY = "managedBrowserWorkspaces";
 var subscribers = /* @__PURE__ */ new Map();
 var attachedDebuggerTabs = /* @__PURE__ */ new Set();
@@ -276,6 +280,20 @@ async function openTab(workspace, data) {
   await broadcast(workspace, { type: "workspace-updated", workspace });
   return { tab: browserTab, workspace };
 }
+async function duplicateTab(workspace, tabId, active) {
+  assertOwnedTab(workspace, tabId);
+  const duplicated = await chrome.tabs.duplicate(tabId);
+  if (!Number.isInteger(duplicated.id)) throw new Error("Chrome did not duplicate the managed tab.");
+  if (workspace.groupId !== null) await chrome.tabs.group({ tabIds: [duplicated.id], groupId: workspace.groupId });
+  if (!active) await chrome.tabs.update(duplicated.id, { active: false });
+  workspace.tabIds.push(duplicated.id);
+  if (active) workspace.activeTabId = duplicated.id;
+  await persistWorkspaces();
+  const tab = toBrowserTab(await chrome.tabs.get(duplicated.id));
+  await broadcast(workspace, { type: "workspace-tab-opened", workspaceId: workspace.id, tab });
+  await broadcast(workspace, { type: "workspace-updated", workspace });
+  return { tab, workspace };
+}
 async function captureScreenshot(workspace, data) {
   const tabId = assertOwnedTab(workspace, data.tabId);
   await ensureDebugger(tabId);
@@ -362,6 +380,15 @@ async function runAgent(workspace, operation) {
     await chrome.tabs.goForward(tabId);
     return { ok: true };
   }
+  if (operation.type === "duplicate") return duplicateTab(workspace, assertOwnedTab(workspace, operation.tabId), operation.active ?? true);
+  if (operation.type === "pin") {
+    const tabId = assertOwnedTab(workspace, operation.tabId);
+    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { pinned: operation.pinned })) };
+  }
+  if (operation.type === "mute") {
+    const tabId = assertOwnedTab(workspace, operation.tabId);
+    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { muted: operation.muted })) };
+  }
   if (operation.type === "close") return closeTab(workspace, assertOwnedTab(workspace, operation.tabId));
   if (operation.type === "screenshot") return captureScreenshot(workspace, { tabId: operation.tabId });
   if (operation.type === "input") return dispatchInput(workspace, { tabId: operation.tabId, input: operation.input });
@@ -406,6 +433,24 @@ async function handleWorkspaceAction(origin, action, data) {
     await chrome.tabs.goForward(assertOwnedTab(workspace, payload.tabId));
     return { ok: true };
   }
+  if (action === "workspaceRename") {
+    workspace.label = label(payload.label);
+    if (workspace.groupId !== null) await chrome.tabGroups.update(workspace.groupId, { title: workspace.label });
+    await persistWorkspaces();
+    await broadcast(workspace, { type: "workspace-updated", workspace });
+    return { workspace };
+  }
+  if (action === "workspacePinTab") {
+    const tabId = assertOwnedTab(workspace, payload.tabId);
+    if (typeof payload.pinned !== "boolean") throw new TypeError("pinned must be a boolean.");
+    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { pinned: payload.pinned })) };
+  }
+  if (action === "workspaceMuteTab") {
+    const tabId = assertOwnedTab(workspace, payload.tabId);
+    if (typeof payload.muted !== "boolean") throw new TypeError("muted must be a boolean.");
+    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { muted: payload.muted })) };
+  }
+  if (action === "workspaceDuplicateTab") return duplicateTab(workspace, assertOwnedTab(workspace, payload.tabId), payload.active !== false);
   if (action === "workspaceCloseTab") return closeTab(workspace, assertOwnedTab(workspace, payload.tabId));
   if (action === "workspaceClose") return closeWorkspace(workspace);
   if (action === "workspaceSetAgentControl") {

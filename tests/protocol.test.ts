@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BRIDGE_CHANNEL, BRIDGE_VERSION, isBridgeCommand, isBridgeReady, normalizeTabUrl } from "../src/protocol";
+import { BRIDGE_CHANNEL, BRIDGE_VERSION, TAB_ACTIONS, isBridgeCommand, isBridgeReady, normalizeTabUrl } from "../src/protocol";
 
 describe("browser bridge protocol", () => {
   it("normalizes HTTP and HTTPS tab URLs", () => {
@@ -28,5 +28,12 @@ describe("browser bridge protocol", () => {
   it("recognizes a versioned bridge-ready handshake with an extension version", () => {
     expect(isBridgeReady({ channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "ready", extensionVersion: "1.2.0" })).toBe(true);
     expect(isBridgeReady({ channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "ready" })).toBe(false);
+  });
+
+  it("exposes the managed-tab preference and duplication actions in the versioned protocol", () => {
+    expect(TAB_ACTIONS).toContain("workspaceRename");
+    expect(TAB_ACTIONS).toContain("workspacePinTab");
+    expect(TAB_ACTIONS).toContain("workspaceMuteTab");
+    expect(TAB_ACTIONS).toContain("workspaceDuplicateTab");
   });
 });

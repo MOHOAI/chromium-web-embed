@@ -13,6 +13,10 @@ export const TAB_ACTIONS = [
   "workspaceReload",
   "workspaceBack",
   "workspaceForward",
+  "workspaceRename",
+  "workspacePinTab",
+  "workspaceMuteTab",
+  "workspaceDuplicateTab",
   "workspaceCloseTab",
   "workspaceClose",
   "workspaceSetAgentControl",
@@ -49,6 +53,13 @@ export type ManagedBrowserWorkspace = {
   createdAt: number;
 };
 
+/** A read-only view suitable for monitoring, logging, and AI planning loops. */
+export type ManagedWorkspaceSnapshot = {
+  workspace: ManagedBrowserWorkspace;
+  tabs: BrowserTab[];
+  capturedAt: number;
+};
+
 export type BrowserEvent =
   | { type: "workspace-created"; workspace: ManagedBrowserWorkspace; tab: BrowserTab }
   | { type: "workspace-updated"; workspace: ManagedBrowserWorkspace }
@@ -77,6 +88,9 @@ export type AgentOperation =
   | { type: "reload"; tabId: number }
   | { type: "back"; tabId: number }
   | { type: "forward"; tabId: number }
+  | { type: "duplicate"; tabId: number; active?: boolean }
+  | { type: "pin"; tabId: number; pinned: boolean }
+  | { type: "mute"; tabId: number; muted: boolean }
   | { type: "close"; tabId: number }
   | { type: "screenshot"; tabId?: number }
   | { type: "input"; tabId?: number; input: SharedTabInput };
@@ -86,6 +100,7 @@ export type ExtensionStatus = {
   version: string;
   capabilities: readonly TabAction[];
   model: "managed-workspace";
+  privacy: "origin-isolated";
 };
 
 export type BridgeCommand = {

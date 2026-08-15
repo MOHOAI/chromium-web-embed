@@ -79,7 +79,7 @@ function urlValue(data: unknown): string {
 }
 
 export function createExtensionStatus(version: string): ExtensionStatus {
-  return { available: true, version, capabilities: TAB_ACTIONS, model: "managed-workspace" };
+  return { available: true, version, capabilities: TAB_ACTIONS, model: "managed-workspace", privacy: "origin-isolated" };
 }
 
 export async function handleTabAction(

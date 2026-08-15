@@ -4,7 +4,7 @@
 
 > لا يمكن لموقع ويب تضمين صفحات الويب الأخرى بحرية عبر `iframe`. يعرض `SharedTabViewer` لقطات دورية من تبويب مجموعة التطبيق ويرسل أحداث الإدخال إليه محليًا عبر Chrome DevTools Protocol. لا تمر الجلسة عبر خادم وسيط.
 
-## ما الذي تغيّر في الإصدار 2.0
+## ما الذي تغيّر في الإصدار 2.1
 
 لا تختار الإضافة تبويبًا قائمًا من تبويبات المستخدم، ولا تعرض قائمته. بدلًا من ذلك، ينشئ التطبيق مساحة جديدة معزولة بحسب أصله، وتضم المجموعة التبويبات التي فتحها التطبيق فقط. إغلاق المساحة يغلق تبويباتها ويوقف كل تحكم صادر منها.
 
@@ -13,6 +13,8 @@
 | إنشاء مجموعة تبويبات خاصة بالتطبيق | متاح تلقائيًا بعد الاتصال |
 | فتح وإدارة تبويبات المجموعة من التطبيق | متاح |
 | عرض التبويب النشط والنقر والتمرير والكتابة فيه | متاح داخل المجموعة فقط |
+| إعادة تسمية المساحة وتثبيت أو كتم أو نسخ تبويباتها | متاح |
+| لقطة وصفية للمساحة (`workspaceSnapshot`) | متاح للمراقبة والتخطيط |
 | تحويل المجموعة إلى مساحة لوكيل ذكاء اصطناعي | متاح بعد تفعيل صريح من المستخدم |
 | عرض تبويبات المستخدم الموجودة أو إدارتها | غير متاح |
 | الوصول إلى سطح المكتب أو تطبيقات النظام الأصلية | غير متاح |
@@ -74,11 +76,15 @@ browser.dispose();
 يمكن لتطبيقك تفعيل وصول وكيل إلى مساحة التطبيق بعد موافقة المستخدم الواضحة:
 
 ```ts
-await browser.setAgentControl(true);
+import { createManagedBrowserAgent } from "chromium-web-embed";
 
-await browser.agent.execute({ type: "open", url: "https://example.com" });
-await browser.agent.execute({ type: "click", x: 420, y: 260 });
-await browser.agent.execute({ type: "type", text: "بحث تجريبي" });
+await browser.setAgentControl(true);
+const agent = createManagedBrowserAgent({ client: browser });
+
+await agent.open("https://example.com");
+await agent.click(420, 260);
+await agent.type("بحث تجريبي");
+const snapshot = await agent.snapshot();
 
 // يوقف المستخدم أو التطبيق هذه القدرة فورًا.
 await browser.setAgentControl(false);
@@ -94,6 +100,18 @@ await browser.setAgentControl(false);
 
 تحتاج الإضافة إلى صلاحيات `tabs` و`tabGroups` و`debugger` لكي تنشئ المجموعة وتلتقط لقطاتها وترسل أحداث الإدخال إليها. لا تمنح هذه الصلاحيات الوصول إلى كلمات المرور أو ملفات تعريف الارتباط أو محتوى DOM.
 
+## أدلة التكامل
+
+ابدأ بالدليل المتوافق مع بنية تطبيقك. كل الأمثلة تراعي أن الجسر يعمل داخل متصفح المستخدم وأن التطبيق لا يرى سوى التبويبات التي أنشأها في مساحته.
+
+| الدليل | يناسب |
+| --- | --- |
+| [JavaScript مباشر](docs/guides/plain-javascript.md) | صفحات HTML أو تطبيقات JavaScript دون إطار. |
+| [React](docs/guides/react.md) | مكونات React ودورة حياتها. |
+| [تنسيق الخادم](docs/guides/backend-coordination.md) | واجهات Node.js التي تصدر نوايا آمنة وسجلات موافقة. |
+| [وكلاء الذكاء الاصطناعي](docs/guides/ai-agent.md) | تخطيط منظم وتحكم محدود بعد موافقة المستخدم. |
+| [نموذج وكيل مرجعي](examples/ai-agent-reference.ts) | حلقة observe → plan → act → verify كاملة قابلة للتعديل. |
+
 ## واجهة API المختصرة
 
 | التصدير أو الأمر | الغرض |
@@ -102,9 +120,11 @@ await browser.setAgentControl(false);
 | `createWorkspace()` | إنشاء مجموعة تبويبات جديدة ومنعزلة للتطبيق |
 | `openInWorkspace()` / `navigateInWorkspace()` | فتح تبويبات المجموعة أو التنقل فيها |
 | `listWorkspaceTabs()` / `activateInWorkspace()` | عرض تبويبات المجموعة والتبديل بينها |
+| `renameWorkspace()` / `pinWorkspaceTab()` / `muteWorkspaceTab()` / `duplicateWorkspaceTab()` | تسمية مساحة التطبيق وإدارة تبويباتها |
+| `workspaceSnapshot()` | قراءة حالة المساحة وتبويباتها بلقطة واحدة |
 | `closeWorkspace()` | إغلاق تبويبات المجموعة وإيقاف المساحة |
 | `SharedTabViewer` | عرض لقطة التبويب النشط وتمرير الإدخال إليه |
-| `setAgentControl()` و`browser.agent.execute()` | تمكين وتنفيذ أوامر الوكيل داخل المجموعة بعد الموافقة |
+| `setAgentControl()` و`ManagedBrowserAgent` | تمكين وتنفيذ أوامر الوكيل داخل المجموعة بعد الموافقة |
 | `getConnectionDiagnostic()` | تشخيص حالة الجسر المحلي والاتصال |
 
 ## التطوير والتحقق

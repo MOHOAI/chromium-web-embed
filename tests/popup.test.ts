@@ -21,7 +21,14 @@ async function mountPopup(url: string, bridge: { supported: boolean; ready: bool
   const encoded = Buffer.from(`${popupSource}\n// test-run ${Date.now()}-${Math.random()}`).toString("base64");
   await import(`data:text/javascript;base64,${encoded}`);
   await new Promise((resolve) => setTimeout(resolve, 0));
-  return { sendMessage, bridgeText: document.querySelector("#bridge-status")?.textContent ?? "", statusText: document.querySelector("#status")?.textContent ?? "" };
+  return {
+    sendMessage,
+    bridgeText: document.querySelector("#bridge-status")?.textContent ?? "",
+    statusText: document.querySelector("#status")?.textContent ?? "",
+    agentText: document.querySelector("#agent-status")?.textContent ?? "",
+    agentState: document.querySelector("#agent-status")?.getAttribute("data-state") ?? "",
+    workspaceDetail: document.querySelector("#workspace-detail")?.textContent ?? "",
+  };
 }
 
 describe("نافذة إضافة المتصفح المُدار", () => {
@@ -41,5 +48,22 @@ describe("نافذة إضافة المتصفح المُدار", () => {
   it("يعرض تشخيصًا واضحًا عند فتح النافذة فوق صفحة خارج نطاق HTTP أو HTTPS", async () => {
     const result = await mountPopup("chrome://extensions", { supported: false, ready: false });
     expect(result.statusText).toContain("HTTP أو HTTPS");
+  });
+
+  it("يحدّث DOM لحالات مساحة العمل وموافقة الوكيل الحية", async () => {
+    const noWorkspace = await mountPopup("https://app.example.test", { supported: true, ready: true });
+    expect(noWorkspace.agentText).toContain("لا توجد مساحة");
+    expect(noWorkspace.agentState).toBe("unknown");
+    expect(noWorkspace.workspaceDetail).toContain("افتح مساحة");
+
+    const enabled = await mountPopup("https://app.example.test", { supported: true, ready: true }, { label: "مساحة الوكيل", tabIds: [101], agentControlEnabled: true });
+    expect(enabled.agentText).toContain("مفعّلة");
+    expect(enabled.agentState).toBe("enabled");
+    expect(enabled.workspaceDetail).toContain("يمكن إيقاف");
+
+    const disabled = await mountPopup("https://app.example.test", { supported: true, ready: true }, { label: "مساحة المراجعة", tabIds: [202, 203], agentControlEnabled: false });
+    expect(disabled.agentText).toContain("معطّلة");
+    expect(disabled.agentState).toBe("disabled");
+    expect(disabled.workspaceDetail).toContain("لن تُقبل");
   });
 });

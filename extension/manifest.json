@@ -1,11 +1,17 @@
 {
   "manifest_version": 3,
-  "name": "Real Browser Web Bridge",
-  "version": "2.0.0",
-  "description": "Creates and controls isolated Chrome tab groups for approved web apps.",
+  "name": "Moho Browser Workspace",
+  "version": "2.1.0",
+  "description": "Creates isolated, user-visible Chrome workspaces for approved web applications and AI agents.",
   "permissions": ["tabs", "tabGroups", "debugger", "scripting", "storage"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": { "service_worker": "service-worker.js", "type": "module" },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
@@ -16,5 +22,14 @@
   "externally_connectable": {
     "matches": ["http://*/*", "https://*/*"]
   },
-  "action": { "default_title": "Real Browser Web Bridge", "default_popup": "popup.html" }
+  "action": {
+    "default_title": "Moho Browser Workspace",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  }
 }

@@ -1,11 +1,22 @@
 const statusElement = document.querySelector("#status");
 const bridgeStatusElement = document.querySelector("#bridge-status");
 const workspaceStatusElement = document.querySelector("#workspace-status");
+const workspaceDetailElement = document.querySelector("#workspace-detail");
+const agentStatusElement = document.querySelector("#agent-status");
 const closeButton = document.querySelector("#close-workspace");
 let activeSiteTabId = null;
 
 function setStatus(message, danger = false) { statusElement.textContent = message; statusElement.style.color = danger ? "#ffb9c2" : "#71d9c2"; }
 function setBridgeStatus(message, danger = false) { bridgeStatusElement.textContent = message; bridgeStatusElement.style.borderColor = danger ? "#7f3d4a" : "#2c4359"; }
+function setAgentStatus(enabled) {
+  if (enabled === true) {
+    agentStatusElement.textContent = "صلاحية الوكيل: مفعّلة";
+    agentStatusElement.dataset.state = "enabled";
+    return;
+  }
+  agentStatusElement.textContent = enabled === false ? "صلاحية الوكيل: معطّلة" : "صلاحية الوكيل: لا توجد مساحة";
+  agentStatusElement.dataset.state = enabled === false ? "disabled" : "unknown";
+}
 
 async function activeSiteTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -25,11 +36,13 @@ async function activateBridgeForCurrentPage() {
 
 function renderWorkspace(workspace) {
   if (!workspace) {
-    workspaceStatusElement.innerHTML = "<strong>مساحة التطبيق</strong>لا توجد مساحة متصفح مُدارة لهذه الصفحة بعد.";
+    setAgentStatus(null);
+    workspaceDetailElement.textContent = "لا توجد مساحة متصفح مُدارة لهذه الصفحة بعد. افتح مساحة من موقع التطبيق أولًا.";
     closeButton.hidden = true;
     return;
   }
-  workspaceStatusElement.innerHTML = `<strong>${workspace.label}</strong>${workspace.tabIds.length} تبويبًا تديره هذه المساحة فقط. ${workspace.agentControlEnabled ? "وضع الوكيل مفعّل ويمكن إيقافه من التطبيق." : "وضع الوكيل متوقف."}`;
+  setAgentStatus(workspace.agentControlEnabled);
+  workspaceDetailElement.textContent = `${workspace.label}: ${workspace.tabIds.length} تبويبًا تديره هذه المساحة فقط. ${workspace.agentControlEnabled ? "يمكن إيقاف تحكم الوكيل من التطبيق في أي وقت." : "لن تُقبل أوامر الوكيل إلى أن يفعّله المستخدم من التطبيق."}`;
   closeButton.hidden = false;
 }
 
