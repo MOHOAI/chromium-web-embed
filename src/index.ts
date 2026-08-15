@@ -108,7 +108,9 @@ export class RealBrowserClient {
   }
 
   async workspace(): Promise<{ workspace: ManagedBrowserWorkspace | null }> {
-    const result = await this.request<{ workspace: ManagedBrowserWorkspace | null }>("workspaceGet", this.workspaceData());
+    // Workspace discovery is intentionally allowed before createWorkspace().
+    // This lets applications resume an origin-owned workspace or create one on first use.
+    const result = await this.request<{ workspace: ManagedBrowserWorkspace | null }>("workspaceGet", this.workspaceId ? this.workspaceData() : undefined);
     if (result.workspace) this.workspaceId = result.workspace.id;
     return result;
   }

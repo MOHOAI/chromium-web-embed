@@ -22,7 +22,7 @@ export function createRealBrowserExtensionManifest(options: ExtensionManifestOpt
   return {
     manifest_version: 3,
     name: options.name ?? "Real Browser Web Bridge",
-    version: options.version ?? "2.1.0",
+    version: options.version ?? "2.1.1",
     description: options.description ?? "Lets approved web apps create and control isolated, user-visible Chrome tab groups.",
     permissions: ["tabs", "tabGroups", "debugger", "scripting", "storage"],
     host_permissions: [...options.allowedOrigins],

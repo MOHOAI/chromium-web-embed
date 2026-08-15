@@ -103,7 +103,7 @@ function assertAgentControlEnabled(workspace) {
 }
 
 // src/extension-worker.ts
-var EXTENSION_VERSION = "2.1.0";
+var EXTENSION_VERSION = "2.1.1";
 var WORKSPACES_KEY = "managedBrowserWorkspaces";
 var subscribers = /* @__PURE__ */ new Map();
 var attachedDebuggerTabs = /* @__PURE__ */ new Set();
@@ -397,8 +397,8 @@ async function runAgent(workspace, operation) {
 async function handleWorkspaceAction(origin, action, data) {
   const payload = workspaceData(data);
   if (action === "workspaceCreate") return createWorkspace(origin, payload);
+  if (action === "workspaceGet") return { workspace: await findWorkspace(origin, payload) };
   const workspace = await requireWorkspace(origin, payload);
-  if (action === "workspaceGet") return { workspace };
   if (action === "workspaceList") {
     const tabs = [];
     for (const tabId of workspace.tabIds) {

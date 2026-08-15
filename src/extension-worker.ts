@@ -18,7 +18,7 @@ import {
 
 declare const chrome: any;
 
-const EXTENSION_VERSION = "2.1.0";
+const EXTENSION_VERSION = "2.1.1";
 const WORKSPACES_KEY = "managedBrowserWorkspaces";
 const subscribers = new Map<number, string>();
 const attachedDebuggerTabs = new Set<number>();
@@ -306,8 +306,10 @@ async function runAgent(workspace: ManagedBrowserWorkspace, operation: AgentOper
 async function handleWorkspaceAction(origin: string, action: string, data?: Record<string, unknown>): Promise<unknown> {
   const payload = workspaceData(data);
   if (action === "workspaceCreate") return createWorkspace(origin, payload);
+  // Discovery must not require an existing workspace: first-run applications use this
+  // response to decide whether to create a workspace for their own origin.
+  if (action === "workspaceGet") return { workspace: await findWorkspace(origin, payload) };
   const workspace = await requireWorkspace(origin, payload);
-  if (action === "workspaceGet") return { workspace };
   if (action === "workspaceList") {
     const tabs: BrowserTab[] = [];
     for (const tabId of workspace.tabIds) { try { tabs.push(toBrowserTab(await chrome.tabs.get(tabId) as ChromeLikeTab)); } catch { /* stale tabs are removed during the next cleanup */ } }

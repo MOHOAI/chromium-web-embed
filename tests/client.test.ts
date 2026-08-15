@@ -17,10 +17,10 @@ describe("RealBrowserClient managed workspace", () => {
   it("sends a versioned status request and receives the isolated workspace state", async () => {
     vi.spyOn(window, "postMessage").mockImplementation((message: unknown) => {
       const command = message as Partial<BridgeCommand>;
-      if (command.kind === "command" && command.action === "status") respondTo(command as BridgeCommand, { available: true, version: "2.1.0", capabilities: ["status"], model: "managed-workspace", privacy: "origin-isolated" });
+      if (command.kind === "command" && command.action === "status") respondTo(command as BridgeCommand, { available: true, version: "2.1.1", capabilities: ["status"], model: "managed-workspace", privacy: "origin-isolated" });
     });
     const client = new RealBrowserClient();
-    await expect(client.status()).resolves.toMatchObject({ available: true, version: "2.1.0", model: "managed-workspace", privacy: "origin-isolated" });
+    await expect(client.status()).resolves.toMatchObject({ available: true, version: "2.1.1", model: "managed-workspace", privacy: "origin-isolated" });
     client.dispose();
   });
 
@@ -29,13 +29,13 @@ describe("RealBrowserClient managed workspace", () => {
     vi.spyOn(window, "postMessage").mockImplementation((message: unknown) => {
       const command = message as Partial<BridgeCommand>;
       if (command.kind !== "command") return;
-      if (command.action === "status" && ++statusAttempts >= 2) respondTo(command as BridgeCommand, { available: true, version: "2.1.0", capabilities: ["status", "subscribe"], model: "managed-workspace", privacy: "origin-isolated" });
+      if (command.action === "status" && ++statusAttempts >= 2) respondTo(command as BridgeCommand, { available: true, version: "2.1.1", capabilities: ["status", "subscribe"], model: "managed-workspace", privacy: "origin-isolated" });
       if (command.action === "subscribe") respondTo(command as BridgeCommand, { subscribed: true });
     });
     const client = new RealBrowserClient({ timeoutMs: 10 });
-    await expect(client.waitForExtension({ timeoutMs: 500, retryIntervalMs: 150 })).resolves.toMatchObject({ version: "2.1.0" });
+    await expect(client.waitForExtension({ timeoutMs: 500, retryIntervalMs: 150 })).resolves.toMatchObject({ version: "2.1.1" });
     expect(statusAttempts).toBe(2);
-    expect(client.getConnectionDiagnostic()).toMatchObject({ code: "connected", extensionVersion: "2.1.0" });
+    expect(client.getConnectionDiagnostic()).toMatchObject({ code: "connected", extensionVersion: "2.1.1" });
     client.dispose();
   });
 
@@ -49,6 +49,22 @@ describe("RealBrowserClient managed workspace", () => {
     await expect(client.createWorkspace({ url: "example.com", label: "تجربة" })).resolves.toMatchObject({ workspace: { id: "ws-1" }, tab: { id: 8 } });
     expect(received?.data).toMatchObject({ url: "https://example.com/", label: "تجربة" });
     expect(client.getWorkspaceId()).toBe("ws-1");
+    client.dispose();
+  });
+
+  it("discovers that an origin has no workspace before creating one", async () => {
+    let received: BridgeCommand | undefined;
+    vi.spyOn(window, "postMessage").mockImplementation((message: unknown) => {
+      const command = message as Partial<BridgeCommand>;
+      if (command.kind === "command" && command.action === "workspaceGet") {
+        received = command as BridgeCommand;
+        respondTo(received, { workspace: null });
+      }
+    });
+    const client = new RealBrowserClient();
+    await expect(client.workspace()).resolves.toEqual({ workspace: null });
+    expect(received?.data).toBeUndefined();
+    expect(client.getWorkspaceId()).toBeUndefined();
     client.dispose();
   });
 
