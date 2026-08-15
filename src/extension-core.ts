@@ -81,7 +81,7 @@ export function createExtensionStatus(version: string): ExtensionStatus {
 
 export async function handleTabAction(
   tabs: ChromeTabsAdapter,
-  action: Exclude<TabAction, "status" | "subscribe">,
+  action: Exclude<TabAction, "status" | "subscribe" | "shared" | "screenshot" | "input" | "stopShare">,
   data?: Record<string, unknown>,
 ): Promise<unknown> {
   if (action === "open") {

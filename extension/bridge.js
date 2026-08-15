@@ -14,7 +14,11 @@ var TAB_ACTIONS = [
   "forward",
   "close",
   "pin",
-  "mute"
+  "mute",
+  "shared",
+  "screenshot",
+  "input",
+  "stopShare"
 ];
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);

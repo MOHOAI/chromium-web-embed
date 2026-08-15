@@ -5,7 +5,8 @@ describe("extension manifest", () => {
   it("creates a restrictive Manifest V3 configuration", () => {
     const manifest = createRealBrowserExtensionManifest({ allowedOrigins: ["https://app.example.com/*"] });
     expect(manifest.manifest_version).toBe(3);
-    expect(manifest.permissions).toEqual(["tabs"]);
+    expect(manifest.permissions).toEqual(["tabs", "debugger"]);
+    expect(manifest.action.default_popup).toBe("popup.html");
     expect(manifest.content_scripts[0]?.matches).toEqual(["https://app.example.com/*"]);
   });
 

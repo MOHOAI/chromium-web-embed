@@ -58,4 +58,24 @@ describe("RealBrowserClient", () => {
     expect(received?.data).toMatchObject({ url: "https://example.com/" });
     client.dispose();
   });
+
+  it("requests frames and forwards approved keyboard input to the shared tab", async () => {
+    const received: BridgeCommand[] = [];
+    vi.spyOn(window, "postMessage").mockImplementation((message: unknown) => {
+      const command = message as Partial<BridgeCommand>;
+      if (command?.kind !== "command") return;
+      received.push(command as BridgeCommand);
+      if (command.action === "screenshot") {
+        respondTo(command as BridgeCommand, { tabId: 7, dataUrl: "data:image/jpeg;base64,AAA", width: 1280, height: 720, capturedAt: Date.now() });
+      }
+      if (command.action === "input") respondTo(command as BridgeCommand, { ok: true });
+    });
+    const client = new RealBrowserClient();
+
+    await expect(client.screenshot()).resolves.toMatchObject({ tabId: 7, width: 1280 });
+    await expect(client.input({ kind: "key", type: "keyDown", key: "Tab", code: "Tab" })).resolves.toEqual({ ok: true });
+    expect(received.map((command) => command.action)).toEqual(["screenshot", "input"]);
+    expect(received[1]?.data).toMatchObject({ input: { kind: "key", key: "Tab" } });
+    client.dispose();
+  });
 });

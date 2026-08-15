@@ -1,45 +1,73 @@
 # chromium-web-embed
 
-`chromium-web-embed` is a TypeScript library and a Manifest V3 Chrome extension for letting **approved web applications** open and manage tabs in the user's real Chrome browser. It replaces the previous remote-Chromium architecture: no Playwright process, no screenshot stream, no browser server, and no session token are required.
+`chromium-web-embed` هو مكتبة TypeScript مع إضافة Chrome من نوع Manifest V3 تتيح لتطبيق ويب موثوق **عرض تبويب Chrome يختاره المستخدم بنفسه والتفاعل معه**. لا يوجد خادم متصفح بعيد، ولا رمز جلسة، ولا تتجاوز الإضافة موافقة المستخدم: يختار المستخدم تبويب HTTP أو HTTPS عبر نافذة الإضافة قبل أن يصبح متاحًا للعرض والتحكم.
 
-> This package does not render another website *inside* your web application. Modern browser isolation prevents that. Instead, it opens or manages a real local Chrome tab and returns tab metadata and lifecycle events to the approved web app.
+> لا يمكن للويب تضمين محتوى أي نطاق داخل `iframe` بحرية. بدلًا من ذلك، تعرض `SharedTabViewer` لقطات دورية للتبويب المُشارك داخل عنصر التطبيق، وترسل إليه أحداث النقر والتمرير ولوحة المفاتيح عبر واجهة Chrome DevTools المقيّدة.
 
-## What it can do
+## الإمكانات
 
-| Capability | Available |
+| الإمكانية | الحالة |
 | --- | --- |
-| Open a real Chrome tab | Yes |
-| Navigate, focus, reload, go back or forward | Yes |
-| List browser tabs and read tab metadata | Yes, with the `tabs` permission |
-| Pin, mute, and close managed tabs | Yes |
-| Receive tab update, activation, and removal events | Yes |
-| Render another origin in an iframe-like surface | No |
-| Read page DOM, keystrokes, passwords, or cookies | No |
-| Run arbitrary JavaScript in a page | No |
-| Screenshot or stream tab pixels | No |
+| فتح تبويب Chrome حقيقي وإدارته | متاح |
+| اختيار تبويب قائم لمشاركته صراحةً | متاح من نافذة الإضافة |
+| عرض التبويب المشترك داخل تطبيق الويب | متاح عبر لقطات دورية |
+| النقر والتمرير والكتابة داخل التبويب المشترك | متاح بعد اختيار المستخدم للتبويب |
+| التنقل والتحديث والرجوع والتقدم | متاح للتبويب المشترك أو المُدار |
+| قراءة DOM أو كلمات المرور أو ملفات تعريف الارتباط | غير متاح |
+| تنفيذ JavaScript اعتباطي في الصفحة | غير متاح |
+| اختيار أو مشاركة تبويب دون موافقة المستخدم | غير متاح |
 
-The deliberately limited surface keeps the extension compatible with Chrome's permission model and prevents a web app from becoming an unrestricted remote-control tool.
+## تنزيل الإضافة وتثبيتها
 
-## Install
+نزّل حزمة الإضافة مباشرةً من الرابط التالي:
 
-Install directly from the public GitHub repository until a registry release is published:
+**[تنزيل إضافة Real Browser Web Bridge](https://github.com/MOHOAI/chromium-web-embed/raw/refs/heads/main/extension-download/real-browser-web-bridge-extension.zip)**
+
+1. فك ضغط الملف في مجلد ثابت على جهازك.
+2. افتح `chrome://extensions` في Chrome.
+3. فعّل **وضع المطور**.
+4. اختر **تحميل بدون حزمة**، ثم حدد المجلد الذي فككت ضغطه.
+5. اضبط أصول تطبيقات الويب الموثوقة في `manifest.json` قبل الاستخدام الإنتاجي، ثم أعد تحميل الإضافة.
+6. اضغط أيقونة الإضافة واختر تبويبًا واحدًا لمشاركته مع التطبيق.
+
+لا يسمح Chrome بتثبيت إضافة غير منشورة في متجر Chrome مباشرةً من رابط ويب، ولذلك ينزّل الرابط ملف ZIP للتثبيت اليدوي. هذا قيد من Chrome، وليس قيدًا من المكتبة.
+
+## التثبيت البرمجي
 
 ```bash
 npm install github:MOHOAI/chromium-web-embed
 ```
 
-Build the extension bundle from a clone of this repository:
+## الاستعمال داخل تطبيق ويب
 
-```bash
-npm install
-npm run build
+```ts
+import { createRealBrowserClient, SharedTabViewer } from "chromium-web-embed";
+
+const browser = createRealBrowserClient();
+await browser.connect();
+
+// يظهر null إلى أن يختار المستخدم تبويبًا من نافذة الإضافة.
+const { tab } = await browser.shared();
+if (!tab) {
+  throw new Error("اطلب من المستخدم اختيار تبويب عبر أيقونة الإضافة.");
+}
+
+const viewer = new SharedTabViewer(browser, document.querySelector("#shared-tab")!, {
+  refreshIntervalMs: 350,
+  onError: console.error,
+});
+await viewer.start();
+
+// عند إلغاء تركيب المكوّن:
+viewer.dispose();
+browser.dispose();
 ```
 
-The build writes a load-unpacked extension to `extension/`.
+يمنح `SharedTabViewer` الحاوية تركيزًا عند النقر. ويمكن بعد ذلك تمرير النقر والحركة والتمرير ومفاتيح لوحة المفاتيح إلى التبويب المُشارك فقط.
 
-## Configure the extension
+## إعداد المصدر الموثوق
 
-Before installing, edit `extension/manifest.json` and replace the demonstration origins in both `content_scripts.matches` and `externally_connectable.matches` with the exact web-app origins you trust.
+استبدل الأصول التجريبية في `extension/manifest.json` بأصل تطبيقك الدقيق في كل من `content_scripts.matches` و`externally_connectable.matches`:
 
 ```json
 {
@@ -53,62 +81,27 @@ Before installing, edit `extension/manifest.json` and replace the demonstration 
 }
 ```
 
-Then open `chrome://extensions`, enable **Developer mode**, select **Load unpacked**, and choose the `extension/` directory. Reload your web application after installation.
+لا تستخدم النمط الواسع `https://*/*`. كل أصل وارد في هذه القائمة يستطيع طلب أوامر التحكم للتبويب الذي اختاره المستخدم.
 
-> Do not use `https://*/*` as an approved origin. Every origin in this list can ask the extension to manage the user's Chrome tabs.
+## واجهة API
 
-## Use in a web application
-
-```ts
-import { createRealBrowserClient } from "chromium-web-embed";
-
-const browser = createRealBrowserClient();
-
-try {
-  const extension = await browser.connect();
-  console.log("Extension", extension.version, "is ready");
-
-  const { tab } = await browser.open("https://example.com", {
-    active: true,
-    pinned: false,
-  });
-
-  await browser.reload(tab.id);
-  await browser.pin(tab.id);
-
-  const unsubscribe = browser.onTabEvent((event) => {
-    console.log("Browser event", event);
-  });
-
-  // Call later when the component unmounts.
-  unsubscribe();
-  browser.dispose();
-} catch (error) {
-  // The extension is missing, disabled, or this web-app origin is not approved.
-  console.error(error);
-}
-```
-
-## API
-
-| Export | Purpose |
+| التصدير | الغرض |
 | --- | --- |
-| `RealBrowserClient` | Browser-side client for the local extension bridge. |
-| `createRealBrowserClient()` | Creates a client with a 1.5-second default response timeout. |
-| `BrowserTab` | Safe tab metadata returned to the web app. |
-| `BrowserEvent` | `updated`, `activated`, or `removed` lifecycle event. |
-| `normalizeTabUrl()` | Accepts only HTTP and HTTPS URLs. |
-| `createRealBrowserExtensionManifest()` | Creates a restrictive Manifest V3 configuration for a known set of origins. |
+| `RealBrowserClient` | عميل الموقع لاتصال الإضافة المحلية |
+| `SharedTabViewer` | عارض تفاعلي للقطات التبويب المُشارك وتمرير الإدخال إليه |
+| `createRealBrowserClient()` | إنشاء عميل الرسائل المقيّدة بالأصل |
+| `BrowserTab` | بيانات آمنة عن التبويب، مثل العنوان والرابط والحالة |
+| `SharedTabScreenshot` | لقطة JPEG/PNG مُرمّزة للتبويب الذي اختاره المستخدم |
+| `SharedTabInput` | أحداث المؤشر والتمرير ولوحة المفاتيح المُرسلة للتبويب المُشارك |
+| `createRealBrowserExtensionManifest()` | توليد Manifest مقيّد بأصول تطبيق محددة |
 
-The client offers `connect`, `status`, `open`, `list`, `active`, `navigate`, `activate`, `reload`, `back`, `forward`, `close`, `pin`, `mute`, `onTabEvent`, and `dispose`.
+يوفر العميل الأوامر: `connect`، و`status`، و`open`، و`list`، و`navigate`، و`reload`، و`back`، و`forward`، و`close`، و`pin`، و`mute`، و`shared`، و`screenshot`، و`input`، و`stopSharing`.
 
-## Security model
+## نموذج الأمان
 
-The site-side library sends versioned, JSON-only commands through a content-script bridge that checks `window.location.origin`. The extension accepts a fixed allowlist of commands and checks tab identifiers and URL schemes before calling `chrome.tabs`. It does not include a command for evaluating JavaScript, reading the page DOM, injecting code, or accessing credentials.
+تعتمد الإضافة صلاحيات `tabs` و`debugger` فقط. تلتقط اللقطات وترسل الإدخال إلى **تبويب واحد اختاره المستخدم من نافذة الإضافة**، وتوقف المشاركة عند الإغلاق أو الطلب الصريح. تتحقق قناة الرسائل من الأصل، وإصدار البروتوكول، ومجموعة أوامر مغلقة، وروابط HTTP/HTTPS فقط. ولا تمنح المكتبة إمكانية قراءة DOM أو بيانات الاعتماد أو ملفات تعريف الارتباط، أو تنفيذ نصوص داخل الصفحة.
 
-The `tabs` permission is used only to return tab titles and URLs to approved applications. The extension does not request broad host permissions. If you add permissions such as `scripting`, `activeTab`, or host access in a fork, treat that fork as a new security review.
-
-## Development
+## التطوير والتحقق
 
 ```bash
 npm install
@@ -118,19 +111,15 @@ npm run build
 npm run pack:check
 ```
 
-The test suite covers URL validation, protocol validation, tab-control commands, manifest construction, and client message exchange.
+ينشئ `npm run build` مجلد `extension/` وملف التنزيل `extension-download/real-browser-web-bridge-extension.zip`.
 
-## Migration from 0.x
+## مراجع Chrome
 
-Version 1.0.0 is a deliberate breaking change. It removes the remote Playwright server, JPEG viewer, bearer token, and the `/server` export. Replace `ChromiumViewer` with `RealBrowserClient`, install the extension once, and use a real local tab instead of a remote session.
+- [Chrome Debugger API](https://developer.chrome.com/docs/extensions/reference/api/debugger)
+- [Chrome Tabs API](https://developer.chrome.com/docs/extensions/reference/api/tabs)
+- [Chrome message passing](https://developer.chrome.com/docs/extensions/develop/concepts/messaging)
+- [Chrome externally_connectable](https://developer.chrome.com/docs/extensions/reference/manifest/externally-connectable)
 
-## References
+## الترخيص
 
-- [Chrome: `chrome.tabs` API](https://developer.chrome.com/docs/extensions/reference/api/tabs)
-- [Chrome: Message passing](https://developer.chrome.com/docs/extensions/develop/concepts/messaging)
-- [Chrome: Content scripts](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts)
-- [Chrome: `externally_connectable`](https://developer.chrome.com/docs/extensions/reference/manifest/externally-connectable)
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+MIT. راجع [LICENSE](LICENSE).

@@ -15,6 +15,10 @@ export const TAB_ACTIONS = [
   "close",
   "pin",
   "mute",
+  "shared",
+  "screenshot",
+  "input",
+  "stopShare",
 ] as const;
 
 export type TabAction = (typeof TAB_ACTIONS)[number];
@@ -36,7 +40,21 @@ export type BrowserTab = {
 export type BrowserEvent =
   | { type: "updated"; tab: BrowserTab }
   | { type: "activated"; tab: BrowserTab }
-  | { type: "removed"; tabId: number };
+  | { type: "removed"; tabId: number }
+  | { type: "share-started"; tab: BrowserTab }
+  | { type: "share-stopped"; tabId: number; reason: string };
+
+export type SharedTabScreenshot = {
+  tabId: number;
+  dataUrl: string;
+  capturedAt: number;
+};
+
+export type SharedTabInput =
+  | { kind: "pointer"; type: "mouseMoved" | "mousePressed" | "mouseReleased"; x: number; y: number; button?: "left" | "middle" | "right"; clickCount?: number }
+  | { kind: "wheel"; x: number; y: number; deltaX: number; deltaY: number }
+  | { kind: "key"; type: "keyDown" | "keyUp" | "char"; key: string; code?: string; modifiers?: number }
+  | { kind: "text"; text: string };
 
 export type ExtensionStatus = {
   available: true;

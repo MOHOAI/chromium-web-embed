@@ -21,9 +21,9 @@ export function createRealBrowserExtensionManifest(options: ExtensionManifestOpt
   return {
     manifest_version: 3,
     name: options.name ?? "Real Browser Web Bridge",
-    version: options.version ?? "1.0.0",
-    description: options.description ?? "Lets approved web apps open and manage the user's real Chrome tabs.",
-    permissions: ["tabs"],
+    version: options.version ?? "1.1.0",
+    description: options.description ?? "Lets approved web apps share and control a user-selected real Chrome tab.",
+    permissions: ["tabs", "debugger"],
     background: { service_worker: "service-worker.js", type: "module" },
     content_scripts: [{
       matches: [...options.allowedOrigins],
@@ -31,6 +31,6 @@ export function createRealBrowserExtensionManifest(options: ExtensionManifestOpt
       run_at: "document_start",
     }],
     externally_connectable: { matches: [...options.allowedOrigins] },
-    action: { default_title: options.name ?? "Real Browser Web Bridge" },
+    action: { default_title: options.name ?? "Real Browser Web Bridge", default_popup: "popup.html" },
   } as const;
 }

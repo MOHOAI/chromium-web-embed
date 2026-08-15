@@ -1,7 +1,7 @@
 {
   "name": "chromium-web-embed",
-  "version": "1.0.0",
-  "description": "Connect approved web apps to a real Chrome extension for local tab control.",
+  "version": "1.1.0",
+  "description": "Share a user-selected real Chrome tab with an approved web app for local viewing and interaction.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -10,6 +10,7 @@
   "files": [
     "dist",
     "extension",
+    "extension-download",
     "README.md",
     "LICENSE"
   ],
@@ -26,7 +27,7 @@
     }
   },
   "scripts": {
-    "build": "tsup && node scripts/prepare-extension.mjs",
+    "build": "tsup && node scripts/prepare-extension.mjs && node scripts/package-extension.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -34,6 +35,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "archiver": "^8.0.0",
     "jsdom": "^26.0.0",
     "tsup": "^8.5.0",
     "typescript": "^5.7.0",
