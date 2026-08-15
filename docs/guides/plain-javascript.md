@@ -31,20 +31,29 @@ const client = new RealBrowserClient({ timeoutMs: 2_000 });
 
 await client.waitForExtension({ timeoutMs: 8_000 });
 
-const { workspace, tab } = await client.createWorkspace({
-  label: "بحث المنتج",
-  url: "https://example.com",
-});
+let { workspace } = await client.workspace();
+if (!workspace) {
+  ({ workspace } = await client.createWorkspace({
+    label: "بحث المنتج",
+    url: "https://example.com",
+  }));
+}
 
 const viewer = new SharedTabViewer(
   client,
   document.querySelector<HTMLElement>("#browser-frame")!,
-  { refreshIntervalMs: 350 },
+  {
+    // responsive للمراقبة السريعة، balanced للاستخدام العام، sharp للنصوص الدقيقة.
+    renderProfile: "balanced",
+    pauseWhenHidden: true,
+  },
 );
 
 await viewer.start();
-console.log(workspace.id, tab.id);
+console.log(workspace.id, viewer.getMetrics());
 ```
+
+يعيد `workspace()` القيمة `null` عند التشغيل الأول بدل رمي خطأ. لا تستدعِ `listWorkspaceTabs()` قبل اكتمال هذا المسار؛ فالقائمة تخص مساحة موجودة فقط.
 
 يحول `SharedTabViewer` النقر والتمرير والكتابة إلى التبويب النشط في المساحة نفسها. نظّف الموارد عند مغادرة الصفحة:
 
@@ -98,6 +107,39 @@ try {
 | `bridge-ready` | الجسر حاضر وينتظر المصافحة. | أعد `connect()` أو استخدم `waitForExtension()`. |
 | `subscribe-failed` | رفضت الإضافة الاشتراك في الأحداث. | افحص أن الصفحة HTTP/HTTPS وأن الإضافة محدّثة. |
 | `connected` | العميل جاهز. | أنشئ مساحة أو استعد مساحة قائمة. |
+| `reconnect-required` | انقطع الجسر أثناء أمر يغيّر الحالة. | أعد الاتصال، راجع حالة التبويب، ثم دع المستخدم أو منطقك يقرر إعادة الأمر. |
+
+## سياسة الانقطاع
+
+تتعافى قراءات الحالة تلقائيًا بعد عدد محدود من المحاولات. أما النقر والكتابة والتمرير والتنقل وفتح التبويب فلا تتكرر تلقائيًا؛ إذ قد تكون نفذت جزئيًا قبل انقطاع الرسالة. لا تجعل `catch` يعيد استدعاء الأمر المتغير في حلقة صامتة.
+
+```ts
+try {
+  await client.navigateInWorkspace(tabId, "https://example.com/results");
+} catch (error) {
+  const diagnostic = client.getConnectionDiagnostic();
+  if (diagnostic.code === "reconnect-required") {
+    await client.reconnect();
+    // استعلم عن الحالة الحالية واعرض قرار إعادة المحاولة في واجهتك.
+  }
+  throw error;
+}
+```
+
+## اختيار جودة العرض ومراجعة القياس
+
+```ts
+const metrics = viewer.getMetrics();
+console.table({
+  frames: metrics.framesRendered,
+  captureMs: metrics.averageCaptureLatencyMs,
+  intervalMs: metrics.averageRefreshIntervalMs,
+  fps: metrics.effectiveFps,
+  queued: metrics.queuedRefreshes,
+});
+```
+
+انتقل إلى `responsive` إذا أصبح `queuedRefreshes` أكبر من صفر بصورة متكررة أو ارتفع متوسط زمن الالتقاط. انتقل إلى `sharp` فقط عندما تحتاج إلى حواف نص دقيقة؛ فقد يرفع حجم الإطار وزمن الالتقاط. راجع [الأداء والاعتمادية](../performance-reliability.md) وحدد قياسًا مرجعيًا على الأجهزة والصفحات التي يدعمها منتجك.
 
 ## إغلاق المساحة
 

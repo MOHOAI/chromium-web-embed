@@ -75,10 +75,16 @@ export type SharedTabScreenshot = {
   capturedAt: number;
 };
 
+/** Negotiates a visual quality/speed trade-off for a shared browser frame. */
+export type SharedTabScreenshotOptions = {
+  format?: "jpeg" | "png";
+  quality?: number;
+};
+
 export type SharedTabInput =
   | { kind: "pointer"; type: "mouseMoved" | "mousePressed" | "mouseReleased"; x: number; y: number; button?: "left" | "middle" | "right"; clickCount?: number }
   | { kind: "wheel"; x: number; y: number; deltaX: number; deltaY: number }
-  | { kind: "key"; type: "keyDown" | "keyUp" | "char"; key: string; code?: string; modifiers?: number }
+  | { kind: "key"; type: "keyDown" | "keyUp" | "char"; key: string; code?: string; modifiers?: number; location?: number }
   | { kind: "text"; text: string };
 
 export type AgentOperation =

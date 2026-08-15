@@ -82,17 +82,22 @@ function isSupportedWebAppUrl(value) {
 }
 
 // src/extension-bridge-activation.ts
-async function ensureSiteBridge(api, tabId) {
+var bridgeProbe = () => Boolean(globalThis.__realBrowserWebBridgeInstalled);
+var delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+async function ensureSiteBridge(api, tabId, options = {}) {
   const tab = await api.tabs.get(tabId);
   const url = tab.url ?? tab.pendingUrl ?? "";
-  if (!isSupportedWebAppUrl(url)) return { supported: false, injected: false, ready: false, url };
+  if (!isSupportedWebAppUrl(url)) return { supported: false, injected: false, ready: false, url, attempts: 0 };
+  const attempts = Math.max(1, Math.min(5, Math.round(options.probeAttempts ?? 3)));
+  const pause = Math.max(0, Math.min(1e3, Math.round(options.probeDelayMs ?? 50)));
+  const probe = () => api.scripting.executeScript({ target: { tabId }, func: bridgeProbe, injectImmediately: true });
+  if (await probe().then((result) => result[0]?.result === true).catch(() => false)) return { supported: true, injected: false, ready: true, url, attempts: 1 };
   await api.scripting.executeScript({ target: { tabId }, files: ["bridge.js"], injectImmediately: true });
-  const probe = await api.scripting.executeScript({
-    target: { tabId },
-    func: () => Boolean(globalThis.__realBrowserWebBridgeInstalled),
-    injectImmediately: true
-  });
-  return { supported: true, injected: true, ready: probe[0]?.result === true, url };
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (await probe().then((result) => result[0]?.result === true).catch(() => false)) return { supported: true, injected: true, ready: true, url, attempts: attempt };
+    if (attempt < attempts && pause > 0) await delay(pause);
+  }
+  return { supported: true, injected: true, ready: false, url, attempts };
 }
 
 // src/agent-control-policy.ts
@@ -103,7 +108,7 @@ function assertAgentControlEnabled(workspace) {
 }
 
 // src/extension-worker.ts
-var EXTENSION_VERSION = "2.1.2";
+var EXTENSION_VERSION = "2.2.0";
 var WORKSPACES_KEY = "managedBrowserWorkspaces";
 var subscribers = /* @__PURE__ */ new Map();
 var attachedDebuggerTabs = /* @__PURE__ */ new Set();
@@ -297,9 +302,58 @@ async function duplicateTab(workspace, tabId, active) {
 async function captureScreenshot(workspace, data) {
   const tabId = assertOwnedTab(workspace, data.tabId);
   await ensureDebugger(tabId);
-  const result = await chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", { format: "jpeg", quality: 82, fromSurface: true });
+  const format = data.format === "png" ? "png" : "jpeg";
+  const suppliedQuality = data.quality;
+  const quality = typeof suppliedQuality === "number" && Number.isFinite(suppliedQuality) ? Math.max(30, Math.min(100, Math.round(suppliedQuality))) : 78;
+  const result = await chrome.debugger.sendCommand(
+    { tabId },
+    "Page.captureScreenshot",
+    { format, ...format === "jpeg" ? { quality } : {}, fromSurface: true, optimizeForSpeed: format === "jpeg" }
+  );
   if (!result || typeof result.data !== "string") throw new Error("Chrome did not return a screenshot.");
-  return { tabId, dataUrl: `data:image/jpeg;base64,${result.data}`, capturedAt: Date.now() };
+  return { tabId, dataUrl: `data:image/${format};base64,${result.data}`, capturedAt: Date.now() };
+}
+function modifierMask(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 15 ? value : 0;
+}
+function virtualKeyCode(key, code) {
+  const named = {
+    Backspace: 8,
+    Tab: 9,
+    Enter: 13,
+    Shift: 16,
+    Control: 17,
+    Alt: 18,
+    Pause: 19,
+    CapsLock: 20,
+    Escape: 27,
+    " ": 32,
+    PageUp: 33,
+    PageDown: 34,
+    End: 35,
+    Home: 36,
+    ArrowLeft: 37,
+    ArrowUp: 38,
+    ArrowRight: 39,
+    ArrowDown: 40,
+    Insert: 45,
+    Delete: 46,
+    Meta: 91
+  };
+  if (named[key] !== void 0) return named[key];
+  const keyMatch = code?.match(/^Key([A-Z])$/);
+  if (keyMatch) return keyMatch[1].charCodeAt(0);
+  const digitMatch = code?.match(/^Digit([0-9])$/);
+  if (digitMatch) return digitMatch[1].charCodeAt(0);
+  if (/^[a-z]$/i.test(key)) return key.toUpperCase().charCodeAt(0);
+  if (/^[0-9]$/.test(key)) return key.charCodeAt(0);
+  return void 0;
+}
+async function focusTabForInput(tabId) {
+  try {
+    await chrome.debugger.sendCommand({ tabId }, "Page.bringToFront");
+  } catch {
+  }
 }
 async function dispatchInput(workspace, data) {
   if (!isRecord(data.input)) throw new TypeError("A valid input payload is required.");
@@ -312,9 +366,20 @@ async function dispatchInput(workspace, data) {
     await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", { type: "mouseWheel", x: numberValue(input, "x"), y: numberValue(input, "y"), deltaX: numberValue(input, "deltaX", 0), deltaY: numberValue(input, "deltaY", 0) });
   } else if (input.kind === "key") {
     if (!["keyDown", "keyUp", "char"].includes(input.type) || typeof input.key !== "string" || input.key.length > 128) throw new TypeError("Invalid key input.");
-    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", { type: input.type, key: input.key, code: input.code, modifiers: input.modifiers ?? 0, text: input.type === "char" ? input.key : void 0 });
+    await focusTabForInput(tabId);
+    const keyCode = virtualKeyCode(input.key, input.code);
+    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", {
+      type: input.type,
+      key: input.key,
+      ...input.code ? { code: input.code } : {},
+      modifiers: modifierMask(input.modifiers),
+      ...typeof input.location === "number" ? { location: input.location } : {},
+      ...input.type === "char" ? { text: input.key, unmodifiedText: input.key } : {},
+      ...keyCode !== void 0 ? { windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode } : {}
+    });
   } else if (input.kind === "text") {
-    if (typeof input.text !== "string" || input.text.length > 2e3) throw new TypeError("Text input must be at most 2000 characters.");
+    if (typeof input.text !== "string" || input.text.length > 1e4) throw new TypeError("Text input must be at most 10000 characters.");
+    await focusTabForInput(tabId);
     await chrome.debugger.sendCommand({ tabId }, "Input.insertText", { text: input.text });
   } else throw new TypeError("Unsupported input event.");
   return { ok: true };

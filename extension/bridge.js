@@ -39,7 +39,7 @@ function isBridgeEvent(value) {
 
 // src/extension-bridge.ts
 var origin = window.location.origin;
-var extensionVersion = "2.1.2";
+var extensionVersion = "2.2.0";
 var bridgeGlobal = globalThis;
 if (!bridgeGlobal.__realBrowserWebBridgeInstalled) {
   bridgeGlobal.__realBrowserWebBridgeInstalled = true;

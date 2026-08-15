@@ -18,7 +18,7 @@ import {
 
 declare const chrome: any;
 
-const EXTENSION_VERSION = "2.1.2";
+const EXTENSION_VERSION = "2.2.0";
 const WORKSPACES_KEY = "managedBrowserWorkspaces";
 const subscribers = new Map<number, string>();
 const attachedDebuggerTabs = new Set<number>();
@@ -217,9 +217,43 @@ async function duplicateTab(workspace: ManagedBrowserWorkspace, tabId: number, a
 async function captureScreenshot(workspace: ManagedBrowserWorkspace, data: Record<string, unknown>): Promise<unknown> {
   const tabId = assertOwnedTab(workspace, data.tabId);
   await ensureDebugger(tabId);
-  const result = await chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", { format: "jpeg", quality: 82, fromSurface: true });
+  const format = data.format === "png" ? "png" : "jpeg";
+  const suppliedQuality = data.quality;
+  const quality = typeof suppliedQuality === "number" && Number.isFinite(suppliedQuality)
+    ? Math.max(30, Math.min(100, Math.round(suppliedQuality)))
+    : 78;
+  const result = await chrome.debugger.sendCommand(
+    { tabId },
+    "Page.captureScreenshot",
+    { format, ...(format === "jpeg" ? { quality } : {}), fromSurface: true, optimizeForSpeed: format === "jpeg" },
+  );
   if (!result || typeof result.data !== "string") throw new Error("Chrome did not return a screenshot.");
-  return { tabId, dataUrl: `data:image/jpeg;base64,${result.data}`, capturedAt: Date.now() };
+  return { tabId, dataUrl: `data:image/${format};base64,${result.data}`, capturedAt: Date.now() };
+}
+
+function modifierMask(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 15 ? value : 0;
+}
+
+function virtualKeyCode(key: string, code?: string): number | undefined {
+  const named: Record<string, number> = {
+    Backspace: 8, Tab: 9, Enter: 13, Shift: 16, Control: 17, Alt: 18, Pause: 19, CapsLock: 20,
+    Escape: 27, " ": 32, PageUp: 33, PageDown: 34, End: 35, Home: 36, ArrowLeft: 37,
+    ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Insert: 45, Delete: 46, Meta: 91,
+  };
+  if (named[key] !== undefined) return named[key];
+  const keyMatch = code?.match(/^Key([A-Z])$/);
+  if (keyMatch) return keyMatch[1].charCodeAt(0);
+  const digitMatch = code?.match(/^Digit([0-9])$/);
+  if (digitMatch) return digitMatch[1].charCodeAt(0);
+  if (/^[a-z]$/i.test(key)) return key.toUpperCase().charCodeAt(0);
+  if (/^[0-9]$/.test(key)) return key.charCodeAt(0);
+  return undefined;
+}
+
+async function focusTabForInput(tabId: number): Promise<void> {
+  try { await chrome.debugger.sendCommand({ tabId }, "Page.bringToFront"); }
+  catch { /* Input is still attempted when Chrome does not expose bringToFront. */ }
 }
 
 async function dispatchInput(workspace: ManagedBrowserWorkspace, data: Record<string, unknown>): Promise<{ ok: true }> {
@@ -233,9 +267,20 @@ async function dispatchInput(workspace: ManagedBrowserWorkspace, data: Record<st
     await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", { type: "mouseWheel", x: numberValue(input, "x"), y: numberValue(input, "y"), deltaX: numberValue(input, "deltaX", 0), deltaY: numberValue(input, "deltaY", 0) });
   } else if (input.kind === "key") {
     if (!["keyDown", "keyUp", "char"].includes(input.type) || typeof input.key !== "string" || input.key.length > 128) throw new TypeError("Invalid key input.");
-    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", { type: input.type, key: input.key, code: input.code, modifiers: input.modifiers ?? 0, text: input.type === "char" ? input.key : undefined });
+    await focusTabForInput(tabId);
+    const keyCode = virtualKeyCode(input.key, input.code);
+    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", {
+      type: input.type,
+      key: input.key,
+      ...(input.code ? { code: input.code } : {}),
+      modifiers: modifierMask(input.modifiers),
+      ...(typeof input.location === "number" ? { location: input.location } : {}),
+      ...(input.type === "char" ? { text: input.key, unmodifiedText: input.key } : {}),
+      ...(keyCode !== undefined ? { windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode } : {}),
+    });
   } else if (input.kind === "text") {
-    if (typeof input.text !== "string" || input.text.length > 2_000) throw new TypeError("Text input must be at most 2000 characters.");
+    if (typeof input.text !== "string" || input.text.length > 10_000) throw new TypeError("Text input must be at most 10000 characters.");
+    await focusTabForInput(tabId);
     await chrome.debugger.sendCommand({ tabId }, "Input.insertText", { text: input.text });
   } else throw new TypeError("Unsupported input event.");
   return { ok: true };

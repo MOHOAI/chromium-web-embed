@@ -4,7 +4,7 @@
 
 > لا يمكن لموقع ويب تضمين صفحات الويب الأخرى بحرية عبر `iframe`. يعرض `SharedTabViewer` لقطات دورية من تبويب مجموعة التطبيق ويرسل أحداث الإدخال إليه محليًا عبر Chrome DevTools Protocol. لا تمر الجلسة عبر خادم وسيط.
 
-## ما الذي تغيّر في الإصدار 2.1
+## ما الذي تغيّر في الإصدار 2.2
 
 لا تختار الإضافة تبويبًا قائمًا من تبويبات المستخدم، ولا تعرض قائمته. بدلًا من ذلك، ينشئ التطبيق مساحة جديدة معزولة بحسب أصله، وتضم المجموعة التبويبات التي فتحها التطبيق فقط. إغلاق المساحة يغلق تبويباتها ويوقف كل تحكم صادر منها.
 
@@ -16,6 +16,9 @@
 | إعادة تسمية المساحة وتثبيت أو كتم أو نسخ تبويباتها | متاح |
 | لقطة وصفية للمساحة (`workspaceSnapshot`) | متاح للمراقبة والتخطيط |
 | تحويل المجموعة إلى مساحة لوكيل ذكاء اصطناعي | متاح بعد تفعيل صريح من المستخدم |
+| كتابة وحذف واختصارات مهيأة للتركيب والتركيز | متاح |
+| ملفات عرض سريعة ومتوازنة ودقيقة مع مقاييس أداء | متاح |
+| سجل نشاط محلي للوكيل وتشخيص تعافٍ آمن | متاح |
 | عرض تبويبات المستخدم الموجودة أو إدارتها | غير متاح |
 | الوصول إلى سطح المكتب أو تطبيقات النظام الأصلية | غير متاح |
 | قراءة DOM أو كلمات المرور أو ملفات تعريف الارتباط | غير متاح |
@@ -60,7 +63,7 @@ await browser.openInWorkspace("https://www.wikipedia.org", { active: true });
 await browser.navigateInWorkspace(tab.id, "https://example.com/docs");
 
 const viewer = new SharedTabViewer(browser, document.querySelector("#managed-tab")!, {
-  refreshIntervalMs: 350,
+  renderProfile: "balanced",
   onError: console.error,
 });
 await viewer.start();
@@ -85,6 +88,9 @@ await agent.open("https://example.com");
 await agent.click(420, 260);
 await agent.type("بحث تجريبي");
 const snapshot = await agent.snapshot();
+await agent.clear();
+await agent.type("بحث تجريبي جديد");
+console.table(agent.getActivityLog());
 
 // يوقف المستخدم أو التطبيق هذه القدرة فورًا.
 await browser.setAgentControl(false);
@@ -111,6 +117,9 @@ await browser.setAgentControl(false);
 | [تنسيق الخادم](docs/guides/backend-coordination.md) | واجهات Node.js التي تصدر نوايا آمنة وسجلات موافقة. |
 | [وكلاء الذكاء الاصطناعي](docs/guides/ai-agent.md) | تخطيط منظم وتحكم محدود بعد موافقة المستخدم. |
 | [نموذج وكيل مرجعي](examples/ai-agent-reference.ts) | حلقة observe → plan → act → verify كاملة قابلة للتعديل. |
+| [الأخطاء الشائعة](docs/troubleshooting.md) | أعراض الإضافة والعارض والإدخال والتعافي مع حلول عملية. |
+| [الأداء والاعتمادية](docs/performance-reliability.md) | ملفات العرض والمقاييس وسياسة إعادة الاتصال. |
+| [فهرس 300 تحسين](docs/roadmap-300.md) | بطاقات منتج وهندسة مرتبة وقابلة للاختبار، وليست ادعاء ميزات منفذة. |
 
 ## واجهة API المختصرة
 
@@ -124,7 +133,9 @@ await browser.setAgentControl(false);
 | `workspaceSnapshot()` | قراءة حالة المساحة وتبويباتها بلقطة واحدة |
 | `closeWorkspace()` | إغلاق تبويبات المجموعة وإيقاف المساحة |
 | `SharedTabViewer` | عرض لقطة التبويب النشط وتمرير الإدخال إليه |
+| `SharedTabViewer#getMetrics()` | قراءة زمن الالتقاط ومعدل التحديث والإطارات الفعلي |
 | `setAgentControl()` و`ManagedBrowserAgent` | تمكين وتنفيذ أوامر الوكيل داخل المجموعة بعد الموافقة |
+| `ManagedBrowserAgent#clear()` / `press()` / `scroll()` / `getActivityLog()` | إدخال منضبط ومراجعة نشاط الوكيل |
 | `getConnectionDiagnostic()` | تشخيص حالة الجسر المحلي والاتصال |
 
 ## التطوير والتحقق
