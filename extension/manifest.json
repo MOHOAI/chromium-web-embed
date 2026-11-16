@@ -1,36 +1,44 @@
 {
   "manifest_version": 3,
   "name": "Moho Browser Workspace",
-  "version": "3.0.0",
-  "description": "Creates isolated, user-visible Chrome workspaces for approved web applications and AI agents.",
-  "permissions": ["tabs", "tabGroups", "debugger", "scripting", "storage"],
-  "host_permissions": ["http://*/*", "https://*/*"],
-  "background": { "service_worker": "service-worker.js", "type": "module" },
-  "icons": {
-    "16": "icons/icon-16.png",
-    "32": "icons/icon-32.png",
-    "48": "icons/icon-48.png",
-    "128": "icons/icon-128.png"
+  "version": "4.1.0",
+  "description": "Isolated Chromium workspace bridge for web apps, full local browser automation, MCP tools, and multi-provider AI Computer Use agents (Gemini, Claude, OpenAI, and custom VLMs).",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "debugger",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
   },
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["bridge.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "bridge.js"
+      ],
       "run_at": "document_start",
       "all_frames": true
     }
   ],
   "externally_connectable": {
-    "matches": ["http://*/*", "https://*/*"]
+    "matches": [
+      "http://*/*",
+      "https://*/*"
+    ]
   },
   "action": {
-    "default_title": "Moho Browser Workspace",
     "default_popup": "popup.html",
-    "default_icon": {
-      "16": "icons/icon-16.png",
-      "32": "icons/icon-32.png",
-      "48": "icons/icon-48.png",
-      "128": "icons/icon-128.png"
-    }
+    "default_title": "Moho Browser Workspace"
   }
 }

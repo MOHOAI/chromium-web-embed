@@ -1,551 +1,1087 @@
 import {
-  AgentOperation,
   BRIDGE_CHANNEL,
   BRIDGE_VERSION,
-  BrowserEvent,
-  BrowserTab,
-  BridgeCommand,
-  BridgeResponse,
-  ExtensionStatus,
-  ManagedBrowserWorkspace,
-  ManagedWorkspaceSnapshot,
-  SharedTabInput,
-  SharedTabScreenshot,
-  SharedTabScreenshotOptions,
-  TabAction,
-  isBridgeEvent,
-  isBridgeReady,
-  isBridgeResponse,
-  normalizeTabUrl,
-} from "./protocol";
-
-export {
-  BRIDGE_CHANNEL,
-  BRIDGE_VERSION,
-  normalizeTabUrl,
+  type AgentExecutionResult,
   type AgentOperation,
   type BrowserEvent,
   type BrowserTab,
+  type BrowserWindowMode,
   type ExtensionStatus,
+  type InteractiveDomElement,
   type ManagedBrowserWorkspace,
   type ManagedWorkspaceSnapshot,
+  type ModifierKey,
+  type ScrollDirection,
   type SharedTabInput,
   type SharedTabScreenshot,
-  type SharedTabScreenshotOptions,
   type TabAction,
-} from "./protocol";
+  type UnifiedComputerAction,
+} from "./protocol.js";
+import {
+  SafetyPolicyEngine,
+  type AgentAuditEntry,
+  type SafetyPolicyConfig,
+} from "./safety-policy.js";
 
-export type RealBrowserClientOptions = { targetOrigin?: string; timeoutMs?: number };
-/** Identifies whether this application is running in an iframe without reading its parent document. */
-export type EmbeddedApplicationContext = { embedded: boolean; origin: string };
-export type ExtensionWaitOptions = { timeoutMs?: number; retryIntervalMs?: number };
-export type ExtensionDiagnosticCode = "bridge-not-detected" | "bridge-ready" | "subscribe-failed" | "reconnecting" | "reconnect-required" | "connected";
-export type ExtensionDiagnostic = { code: ExtensionDiagnosticCode; message: string; checkedAt: number; extensionVersion?: string; bridgeReadyAt?: number };
-export type WorkspaceCreateOptions = { url?: string; label?: string; agentControl?: boolean };
-export type WorkspaceOpenOptions = { active?: boolean };
-export type AgentActivityStatus = "started" | "succeeded" | "failed";
-export type AgentActivityEntry = {
-  id: string;
-  operation: AgentOperation;
-  status: AgentActivityStatus;
-  startedAt: number;
-  completedAt?: number;
+export * from "./protocol.js";
+export * from "./agent-control-policy.js";
+export * from "./safety-policy.js";
+export * from "./providers/index.js";
+export * from "./agent-runner.js";
+
+export interface RealBrowserClientOptions {
+  timeoutMs?: number;
+  workspaceId?: string;
+  label?: string;
+}
+
+export interface ConnectionDiagnostic {
+  connected: boolean;
+  embeddedInIframe: boolean;
+  origin: string;
+  extensionInstalled: boolean;
+  bridgeVersion?: number;
+  workspaceId?: string;
   error?: string;
-};
-export type ManagedBrowserAgentOptions = {
-  client: RealBrowserClient;
-  maxActivityEntries?: number;
-  onActivity?: (entry: AgentActivityEntry) => void;
-};
-export type TabListener = (event: BrowserEvent) => void;
-export type KeyPressOptions = { code?: string; modifiers?: number; location?: number };
-export type AgentObserveOptions = SharedTabScreenshotOptions;
-export type SharedTabRenderProfile = "responsive" | "balanced" | "sharp";
-export type SharedTabViewerMetrics = {
-  framesRendered: number;
-  queuedRefreshes: number;
-  lastCaptureMs?: number;
-  averageCaptureLatencyMs?: number;
-  averageRefreshIntervalMs?: number;
-  effectiveFps?: number;
-  lastFrameAt?: number;
-};
-export type SharedTabContextMenuEvent = {
-  clientX: number;
-  clientY: number;
-  x: number;
-  y: number;
-};
-export type SharedTabViewerOptions = {
-  /** responsive favors low-latency JPEG frames, balanced is the default, and sharp preserves text edges with PNG frames. */
-  renderProfile?: SharedTabRenderProfile;
-  refreshIntervalMs?: number;
-  screenshot?: SharedTabScreenshotOptions;
-  pauseWhenHidden?: boolean;
-  onError?: (error: Error) => void;
-  onFrame?: (frame: SharedTabScreenshot) => void;
-  /** Receives a right-click in viewer and lets the embedding app render its own safe action menu. */
-  onContextMenu?: (event: SharedTabContextMenuEvent) => void;
-};
+}
 
-type PendingRequest = { resolve: (value: unknown) => void; reject: (reason: Error) => void; timer: number };
+export function denormalizeCoordinate(value: number, dimension: number): number {
+  const clamped = Math.max(0, Math.min(999, value));
+  return Math.round((clamped / 1000) * dimension);
+}
 
-/**
- * A client for the Manifest V3 extension's managed-workspace API. It never lists or controls
- * user tabs outside the workspace created for the calling application's origin.
- */
+export function getEmbeddedApplicationContext(): {
+  embeddedInIframe: boolean;
+  origin: string;
+  href: string;
+} {
+  if (typeof window === "undefined") {
+    return { embeddedInIframe: false, origin: "", href: "" };
+  }
+  let embeddedInIframe = false;
+  try {
+    embeddedInIframe = window.self !== window.top;
+  } catch {
+    embeddedInIframe = true;
+  }
+  return {
+    embeddedInIframe,
+    origin: window.location.origin,
+    href: window.location.href,
+  };
+}
+
 export class RealBrowserClient {
-  private readonly targetOrigin: string;
   private readonly timeoutMs: number;
-  private readonly pending = new Map<string, PendingRequest>();
-  private readonly listeners = new Set<TabListener>();
-  private disposed = false;
-  private lastBridgeReadyAt?: number;
-  private diagnostic: ExtensionDiagnostic = { code: "bridge-not-detected", message: "لم تصل استجابة من جسر الإضافة بعد.", checkedAt: Date.now() };
   private workspaceId?: string;
+  private label?: string;
+  private pending = new Map<
+    string,
+    {
+      resolve: (value: unknown) => void;
+      reject: (reason?: unknown) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private eventListeners = new Set<(event: BrowserEvent) => void>();
+  private messageListener?: (event: MessageEvent) => void;
 
   constructor(options: RealBrowserClientOptions = {}) {
-    if (typeof window === "undefined") throw new Error("RealBrowserClient must run in a browser window.");
-    this.targetOrigin = options.targetOrigin ?? window.location.origin;
-    this.timeoutMs = options.timeoutMs ?? 1_500;
-    window.addEventListener("message", this.receive);
+    this.timeoutMs = options.timeoutMs ?? 15000;
+    this.workspaceId = options.workspaceId;
+    this.label = options.label;
+    this.attachListener();
+  }
+
+  private attachListener(): void {
+    if (typeof window === "undefined" || this.messageListener) return;
+    this.messageListener = (event: MessageEvent) => {
+      if (event.source !== window || !event.data || typeof event.data !== "object") {
+        return;
+      }
+      const msg = event.data as Record<string, unknown>;
+      if (msg.channel !== BRIDGE_CHANNEL && msg.channel !== "real-browser-web/v3") {
+        return;
+      }
+      if (msg.event && typeof msg.event === "object") {
+        for (const cb of this.eventListeners) {
+          try {
+            cb(msg.event as BrowserEvent);
+          } catch {
+            // ignore listener errors
+          }
+        }
+        return;
+      }
+      if (typeof msg.id === "string" && this.pending.has(msg.id)) {
+        const entry = this.pending.get(msg.id)!;
+        this.pending.delete(msg.id);
+        clearTimeout(entry.timer);
+        if (msg.ok) {
+          entry.resolve(msg.data);
+        } else {
+          entry.reject(new Error(String(msg.error ?? "Extension bridge error")));
+        }
+      }
+    };
+    window.addEventListener("message", this.messageListener);
+  }
+
+  private request<T = unknown>(
+    action: TabAction,
+    payload: Record<string, unknown> = {}
+  ): Promise<T> {
+    if (typeof window === "undefined") {
+      return Promise.reject(
+        new Error("RealBrowserClient requires a browser window environment.")
+      );
+    }
+    this.attachListener();
+    const id = `rbe_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Bridge request "${action}" timed out after ${this.timeoutMs}ms`));
+      }, this.timeoutMs);
+
+      this.pending.set(id, {
+        resolve: resolve as (v: unknown) => void,
+        reject,
+        timer,
+      });
+
+      window.postMessage(
+        {
+          channel: BRIDGE_CHANNEL,
+          id,
+          action,
+          payload: {
+            ...(this.workspaceId ? { workspaceId: this.workspaceId } : {}),
+            ...payload,
+          },
+        },
+        window.location.origin || "*"
+      );
+    });
+  }
+
+  async status(): Promise<ExtensionStatus> {
+    return this.request<ExtensionStatus>("status");
+  }
+
+  async waitForExtension(retries = 10, intervalMs = 250): Promise<ExtensionStatus> {
+    let lastError: unknown;
+    for (let i = 0; i < retries; i++) {
+      try {
+        const st = await this.status();
+        if (st?.installed) return st;
+      } catch (err) {
+        lastError = err;
+      }
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Moho Browser Workspace extension did not respond.");
   }
 
   async connect(): Promise<ExtensionStatus> {
-    let status: ExtensionStatus;
-    try { status = await this.status(); }
-    catch (error) {
-      this.setDiagnostic({ code: "bridge-not-detected", message: error instanceof Error ? error.message : "لم يستجب جسر الإضافة.", bridgeReadyAt: this.lastBridgeReadyAt });
-      throw error;
-    }
-    try { await this.request("subscribe"); }
-    catch (error) {
-      this.setDiagnostic({ code: "subscribe-failed", message: error instanceof Error ? error.message : "تعذّر الاشتراك في أحداث الإضافة.", extensionVersion: status.version, bridgeReadyAt: this.lastBridgeReadyAt });
-      throw error;
-    }
-    this.setDiagnostic({ code: "connected", message: "الإضافة متصلة وجاهزة لإنشاء مساحة متصفح خاصة بهذا التطبيق.", extensionVersion: status.version, bridgeReadyAt: this.lastBridgeReadyAt });
-    return status;
+    const st = await this.waitForExtension();
+    await this.request("subscribe");
+    return st;
   }
 
-  async waitForExtension(options: ExtensionWaitOptions = {}): Promise<ExtensionStatus> {
-    const timeoutMs = Math.max(this.timeoutMs, options.timeoutMs ?? 8_000);
-    const retryIntervalMs = Math.max(150, options.retryIntervalMs ?? 400);
-    const deadline = Date.now() + timeoutMs;
-    let lastError: Error | undefined;
-    while (!this.disposed && Date.now() < deadline) {
-      try { return await this.connect(); }
-      catch (error) { lastError = error instanceof Error ? error : new Error(String(error)); }
-      await new Promise<void>((resolve) => window.setTimeout(resolve, retryIntervalMs));
-    }
-    throw new Error(lastError?.message ?? "The managed-browser extension did not respond. Check that it is installed and enabled for this site.");
-  }
-
-  status(): Promise<ExtensionStatus> { return this.request("status"); }
-
-  async createWorkspace(options: WorkspaceCreateOptions = {}): Promise<{ workspace: ManagedBrowserWorkspace; tab: BrowserTab }> {
-    const result = await this.requestMutation<{ workspace: ManagedBrowserWorkspace; tab: BrowserTab }>("workspaceCreate", {
-      ...(options.url ? { url: normalizeTabUrl(options.url) } : {}),
-      ...(options.label ? { label: options.label } : {}),
-      agentControl: Boolean(options.agentControl),
+  async createWorkspace(options?: {
+    url?: string;
+    label?: string;
+    agentControlEnabled?: boolean;
+  }): Promise<ManagedBrowserWorkspace> {
+    const ws = await this.request<ManagedBrowserWorkspace>("workspaceCreate", {
+      label: options?.label ?? this.label ?? "AI Workspace",
+      url: options?.url,
+      agentControlEnabled: options?.agentControlEnabled ?? false,
     });
-    this.workspaceId = result.workspace.id;
-    return result;
+    this.workspaceId = ws.id;
+    return ws;
   }
 
-  async reconnect(options: ExtensionWaitOptions = {}): Promise<ExtensionStatus> {
-    this.setDiagnostic({ code: "reconnecting", message: "انقطع جسر الإضافة؛ تجري إعادة الاتصال بصورة آمنة.", bridgeReadyAt: this.lastBridgeReadyAt });
-    return this.waitForExtension(options);
+  async reconnect(workspaceId?: string): Promise<ManagedBrowserWorkspace> {
+    const ws = await this.request<ManagedBrowserWorkspace>("workspaceGet", {
+      workspaceId: workspaceId ?? this.workspaceId,
+    });
+    this.workspaceId = ws.id;
+    return ws;
   }
 
-  async workspace(): Promise<{ workspace: ManagedBrowserWorkspace | null }> {
-    // Workspace discovery is intentionally allowed before createWorkspace().
-    // This lets applications resume an origin-owned workspace or create one on first use.
-    const result = await this.requestWithRecovery<{ workspace: ManagedBrowserWorkspace | null }>("workspaceGet", this.workspaceId ? this.workspaceData() : undefined);
-    if (result.workspace) this.workspaceId = result.workspace.id;
-    return result;
+  async workspace(): Promise<ManagedBrowserWorkspace> {
+    return this.request<ManagedBrowserWorkspace>("workspaceGet");
   }
 
-  listWorkspaceTabs(): Promise<{ workspace: ManagedBrowserWorkspace; tabs: BrowserTab[] }> { return this.requestWithRecovery("workspaceList", this.workspaceData()); }
+  async listWorkspaceTabs(): Promise<BrowserTab[]> {
+    return this.request<BrowserTab[]>("workspaceList");
+  }
+
   async workspaceSnapshot(): Promise<ManagedWorkspaceSnapshot> {
-    const { workspace, tabs } = await this.listWorkspaceTabs();
-    return { workspace, tabs, capturedAt: Date.now() };
-  }
-  openInWorkspace(url: string, options: WorkspaceOpenOptions = {}): Promise<{ tab: BrowserTab; workspace: ManagedBrowserWorkspace }> {
-    return this.requestMutation("workspaceOpen", { ...this.workspaceData(), url: normalizeTabUrl(url), active: options.active ?? true });
-  }
-  navigateInWorkspace(tabId: number, url: string): Promise<{ tab: BrowserTab }> { return this.requestMutation("workspaceNavigate", { ...this.workspaceData(), tabId, url: normalizeTabUrl(url) }); }
-  activateInWorkspace(tabId: number): Promise<{ tab: BrowserTab }> { return this.requestMutation("workspaceActivate", { ...this.workspaceData(), tabId }); }
-  reloadInWorkspace(tabId?: number): Promise<{ ok: true }> { return this.requestMutation("workspaceReload", { ...this.workspaceData(), ...(tabId ? { tabId } : {}) }); }
-  backInWorkspace(tabId?: number): Promise<{ ok: true }> { return this.requestMutation("workspaceBack", { ...this.workspaceData(), ...(tabId ? { tabId } : {}) }); }
-  forwardInWorkspace(tabId?: number): Promise<{ ok: true }> { return this.requestMutation("workspaceForward", { ...this.workspaceData(), ...(tabId ? { tabId } : {}) }); }
-  renameWorkspace(label: string): Promise<{ workspace: ManagedBrowserWorkspace }> { return this.requestMutation("workspaceRename", { ...this.workspaceData(), label }); }
-  pinWorkspaceTab(tabId: number, pinned = true): Promise<{ tab: BrowserTab }> { return this.requestMutation("workspacePinTab", { ...this.workspaceData(), tabId, pinned }); }
-  muteWorkspaceTab(tabId: number, muted = true): Promise<{ tab: BrowserTab }> { return this.requestMutation("workspaceMuteTab", { ...this.workspaceData(), tabId, muted }); }
-  duplicateWorkspaceTab(tabId: number, options: WorkspaceOpenOptions = {}): Promise<{ tab: BrowserTab; workspace: ManagedBrowserWorkspace }> {
-    return this.requestMutation("workspaceDuplicateTab", { ...this.workspaceData(), tabId, active: options.active ?? true });
-  }
-  closeWorkspaceTab(tabId: number): Promise<{ ok: true; workspace: ManagedBrowserWorkspace | null }> { return this.requestMutation("workspaceCloseTab", { ...this.workspaceData(), tabId }); }
-  async closeWorkspace(): Promise<{ ok: true }> { const result = await this.requestMutation<{ ok: true }>("workspaceClose", this.workspaceData()); this.workspaceId = undefined; return result; }
-  setAgentControl(enabled: boolean): Promise<{ workspace: ManagedBrowserWorkspace }> { return this.requestMutation("workspaceSetAgentControl", { ...this.workspaceData(), enabled }); }
-  screenshot(tabId?: number, options: SharedTabScreenshotOptions = {}): Promise<SharedTabScreenshot> {
-    return this.requestWithRecovery("workspaceScreenshot", { ...this.workspaceData(), ...(tabId ? { tabId } : {}), ...(options.format ? { format: options.format } : {}), ...(options.quality !== undefined ? { quality: options.quality } : {}) });
-  }
-  input(input: SharedTabInput, tabId?: number): Promise<{ ok: true }> { return this.requestMutation("workspaceInput", { ...this.workspaceData(), input, ...(tabId ? { tabId } : {}) }); }
-  typeText(text: string, tabId?: number): Promise<{ ok: true }> { return this.input({ kind: "text", text }, tabId); }
-  async pressKey(key: string, options: KeyPressOptions = {}, tabId?: number): Promise<{ ok: true }> {
-    await this.input({ kind: "key", type: "keyDown", key, ...options }, tabId);
-    return this.input({ kind: "key", type: "keyUp", key, ...options }, tabId);
-  }
-  agentExecute(operation: AgentOperation): Promise<unknown> { return this.requestMutation("agentExecute", { ...this.workspaceData(), operation }); }
-  getConnectionDiagnostic(): ExtensionDiagnostic { return { ...this.diagnostic }; }
-  getWorkspaceId(): string | undefined { return this.workspaceId; }
-  onTabEvent(listener: TabListener): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
-
-  dispose(): void {
-    if (this.disposed) return;
-    this.disposed = true;
-    window.removeEventListener("message", this.receive);
-    for (const [requestId, pending] of this.pending) { window.clearTimeout(pending.timer); pending.reject(new Error("The managed-browser client was disposed.")); this.pending.delete(requestId); }
-    this.listeners.clear();
-  }
-
-  private workspaceData(): Record<string, unknown> {
-    if (!this.workspaceId) throw new Error("No managed browser workspace exists. Call createWorkspace first.");
-    return { workspaceId: this.workspaceId };
-  }
-
-  private request<T>(action: TabAction, data?: Record<string, unknown>): Promise<T> {
-    if (this.disposed) return Promise.reject(new Error("The managed-browser client was disposed."));
-    const requestId = typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
-    const command: BridgeCommand = { channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "command", requestId, action, ...(data ? { data } : {}) };
-    return new Promise<T>((resolve, reject) => {
-      const timer = window.setTimeout(() => { this.pending.delete(requestId); reject(new Error("The managed-browser extension did not respond. Check that it is installed and enabled for this origin.")); }, this.timeoutMs);
-      this.pending.set(requestId, { resolve: resolve as (value: unknown) => void, reject, timer });
-      window.postMessage(command, this.targetOrigin);
+    return this.request<ManagedWorkspaceSnapshot>("workspaceGet", {
+      includeTabs: true,
     });
   }
 
-  /** Retries read-only operations after a new bridge handshake. Mutating commands remain explicit to prevent duplicate typing, clicks, or navigation. */
-  private async requestWithRecovery<T>(action: TabAction, data?: Record<string, unknown>): Promise<T> {
-    try { return await this.request<T>(action, data); }
-    catch (error) {
-      const reason = error instanceof Error ? error : new Error(String(error));
-      if (!/did not respond|not respond|bridge.*(?:not|missing)/i.test(reason.message)) throw reason;
-      await this.reconnect({ timeoutMs: Math.max(1_000, this.timeoutMs * 3), retryIntervalMs: 150 });
-      return this.request<T>(action, data);
-    }
+  async openInWorkspace(url: string, active = true): Promise<BrowserTab> {
+    return this.request<BrowserTab>("workspaceOpen", { url, active });
   }
 
-  /** Mutating commands are never replayed automatically: the extension may have already applied a click, keypress, or navigation before the reply was lost. */
-  private async requestMutation<T>(action: TabAction, data?: Record<string, unknown>): Promise<T> {
-    try { return await this.request<T>(action, data); }
-    catch (error) {
-      const reason = error instanceof Error ? error : new Error(String(error));
-      if (!/did not respond|not respond|bridge.*(?:not|missing)/i.test(reason.message)) throw reason;
-      const message = `Connection interrupted while running ${action}. The command was not replayed. Call client.reconnect() and explicitly decide whether to retry it.`;
-      this.setDiagnostic({ code: "reconnect-required", message, bridgeReadyAt: this.lastBridgeReadyAt });
-      throw new Error(message);
-    }
+  async navigateInWorkspace(url: string, tabId?: number): Promise<BrowserTab> {
+    return this.request<BrowserTab>("workspaceNavigate", { url, tabId });
   }
 
-  private receive = (event: MessageEvent<unknown>) => {
-    if (event.origin !== this.targetOrigin) return;
-    const message = event.data;
-    if (isBridgeReady(message)) {
-      this.lastBridgeReadyAt = Date.now();
-      this.setDiagnostic({ code: "bridge-ready", message: "تم حقن جسر الإضافة في هذه الصفحة وهو بانتظار المصافحة.", extensionVersion: message.extensionVersion, bridgeReadyAt: this.lastBridgeReadyAt });
-      return;
-    }
-    if (isBridgeEvent(message)) { this.listeners.forEach((listener) => listener(message.event)); return; }
-    if (!isBridgeResponse(message)) return;
-    const pending = this.pending.get(message.requestId);
-    if (!pending) return;
-    this.pending.delete(message.requestId);
-    window.clearTimeout(pending.timer);
-    if (message.ok) pending.resolve(message.result); else pending.reject(new Error(message.error ?? "The extension rejected the command."));
-  };
-
-  private setDiagnostic(next: Omit<ExtensionDiagnostic, "checkedAt">): void { this.diagnostic = { ...next, checkedAt: Date.now() }; }
-}
-
-/**
- * Creates a client for an application running inside an iframe. The extension installs an
- * independent bridge in this frame and keys its workspace to this frame's own HTTP(S) origin.
- * No parent-window message channel, parent-origin trust, or shared workspace is introduced.
- */
-export function createEmbeddedBrowserClient(options: RealBrowserClientOptions = {}): RealBrowserClient {
-  if (typeof window === "undefined") throw new Error("createEmbeddedBrowserClient must run in a browser window.");
-  return new RealBrowserClient({ ...options, targetOrigin: options.targetOrigin ?? window.location.origin });
-}
-
-/** Returns frame-local context for diagnostics and consent copy without touching parent-window state. */
-export function getEmbeddedApplicationContext(): EmbeddedApplicationContext {
-  if (typeof window === "undefined") throw new Error("getEmbeddedApplicationContext must run in a browser window.");
-  let embedded = false;
-  try { embedded = window.self !== window.top; } catch { embedded = true; }
-  return { embedded, origin: window.location.origin };
-}
-
-/** Renders periodic frames from the active tab in the current managed workspace and forwards input only to that workspace. */
-export class SharedTabViewer {
-  private readonly image = document.createElement("img");
-  private readonly interval: number;
-  private readonly screenshotOptions: SharedTabScreenshotOptions;
-  private readonly abort = new AbortController();
-  private timer?: number;
-  private moveFrame?: number;
-  private pendingMove?: Extract<SharedTabInput, { kind: "pointer" }>;
-  private inFlight?: Promise<void>;
-  private refreshQueued = false;
-  private composing = false;
-  private disposed = false;
-  private captureLatencyTotal = 0;
-  private captureSamples = 0;
-  private refreshIntervalTotal = 0;
-  private refreshIntervalSamples = 0;
-  private lastRefreshStartedAt?: number;
-  private readonly metrics: SharedTabViewerMetrics = { framesRendered: 0, queuedRefreshes: 0 };
-
-  constructor(private readonly client: RealBrowserClient, private readonly container: HTMLElement, private readonly options: SharedTabViewerOptions = {}) {
-    const profile = options.renderProfile ?? "balanced";
-    const defaults: Record<SharedTabRenderProfile, { interval: number; screenshot: SharedTabScreenshotOptions }> = {
-      responsive: { interval: 180, screenshot: { format: "jpeg", quality: 58 } },
-      balanced: { interval: 300, screenshot: { format: "jpeg", quality: 78 } },
-      sharp: { interval: 450, screenshot: { format: "png" } },
-    };
-    this.interval = Math.max(120, options.refreshIntervalMs ?? defaults[profile].interval);
-    this.screenshotOptions = { ...defaults[profile].screenshot, ...options.screenshot };
-    this.image.alt = "لقطة تفاعلية للتبويب الموجود في مساحة متصفح التطبيق";
-    this.image.draggable = false;
-    Object.assign(this.image.style, { display: "block", width: "100%", height: "100%", objectFit: "contain" });
-    this.container.replaceChildren(this.image);
-    this.container.tabIndex = this.container.tabIndex >= 0 ? this.container.tabIndex : 0;
-    this.bindInput();
+  async activateInWorkspace(tabId: number): Promise<BrowserTab> {
+    return this.request<BrowserTab>("workspaceActivate", { tabId });
   }
 
-  async start(): Promise<void> {
-    if (this.timer || this.disposed) return;
-    await this.refresh();
-    this.timer = window.setInterval(() => void this.refresh(), this.interval);
-  }
-  async refresh(): Promise<void> {
-    if (this.disposed || (this.options.pauseWhenHidden !== false && document.hidden)) return;
-    if (this.inFlight) { this.refreshQueued = true; this.metrics.queuedRefreshes += 1; return this.inFlight; }
-    const work = (async () => {
-      try {
-        const startedAt = performance.now();
-        const priorRefreshStartedAt = this.lastRefreshStartedAt;
-        this.lastRefreshStartedAt = startedAt;
-        const frame = await this.client.screenshot(undefined, this.screenshotOptions);
-        if (!this.disposed) {
-          this.image.src = frame.dataUrl;
-          this.metrics.framesRendered += 1;
-          const captureLatencyMs = Math.round(performance.now() - startedAt);
-          this.captureLatencyTotal += captureLatencyMs;
-          this.captureSamples += 1;
-          this.metrics.lastCaptureMs = captureLatencyMs;
-          this.metrics.averageCaptureLatencyMs = Math.round(this.captureLatencyTotal / this.captureSamples);
-          if (priorRefreshStartedAt !== undefined) {
-            this.refreshIntervalTotal += Math.max(0, startedAt - priorRefreshStartedAt);
-            this.refreshIntervalSamples += 1;
-            const averageRefreshIntervalMs = Math.round(this.refreshIntervalTotal / this.refreshIntervalSamples);
-            this.metrics.averageRefreshIntervalMs = averageRefreshIntervalMs;
-            this.metrics.effectiveFps = averageRefreshIntervalMs > 0 ? Math.round((1_000 / averageRefreshIntervalMs) * 100) / 100 : undefined;
-          }
-          this.metrics.lastFrameAt = frame.capturedAt;
-          this.options.onFrame?.(frame);
-        }
-      } catch (error) { this.report(error); }
-    })();
-    this.inFlight = work;
-    try { await work; }
-    finally {
-      this.inFlight = undefined;
-      if (this.refreshQueued && !this.disposed) { this.refreshQueued = false; void this.refresh(); }
-    }
-  }
-  dispose(): void {
-    this.disposed = true;
-    this.abort.abort();
-    if (this.timer !== undefined) window.clearInterval(this.timer);
-    if (this.moveFrame !== undefined) window.cancelAnimationFrame(this.moveFrame);
-    this.timer = undefined;
-    this.moveFrame = undefined;
-    this.pendingMove = undefined;
-    this.image.removeAttribute("src");
-  }
-  getMetrics(): SharedTabViewerMetrics { return { ...this.metrics }; }
-
-  private bindInput(): void {
-    const signal = this.abort.signal;
-    const point = (event: MouseEvent) => {
-      const bounds = this.image.getBoundingClientRect();
-      const width = this.image.naturalWidth || bounds.width;
-      const height = this.image.naturalHeight || bounds.height;
-      const scale = Math.min(bounds.width / Math.max(1, width), bounds.height / Math.max(1, height));
-      const paintedWidth = width * scale;
-      const paintedHeight = height * scale;
-      const left = bounds.left + (bounds.width - paintedWidth) / 2;
-      const top = bounds.top + (bounds.height - paintedHeight) / 2;
-      return { x: Math.round(Math.max(0, Math.min(width, (event.clientX - left) / Math.max(scale, 0.0001)))), y: Math.round(Math.max(0, Math.min(height, (event.clientY - top) / Math.max(scale, 0.0001)))) };
-    };
-    const button = (value: number): "left" | "middle" | "right" => value === 1 ? "middle" : value === 2 ? "right" : "left";
-    const modifiers = (event: KeyboardEvent) => (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
-    const send = (input: SharedTabInput) => { void this.client.input(input).catch((error: unknown) => this.report(error)); };
-    const queueMove = (input: Extract<SharedTabInput, { kind: "pointer" }>) => {
-      this.pendingMove = input;
-      if (this.moveFrame !== undefined) return;
-      this.moveFrame = window.requestAnimationFrame(() => {
-        this.moveFrame = undefined;
-        const pending = this.pendingMove;
-        this.pendingMove = undefined;
-        if (pending) send(pending);
-      });
-    };
-    this.container.addEventListener("pointerdown", (event) => { event.preventDefault(); this.container.focus({ preventScroll: true }); send({ kind: "pointer", type: "mousePressed", ...point(event), button: button(event.button), clickCount: event.detail || 1 }); }, { signal });
-    this.container.addEventListener("pointermove", (event) => { queueMove({ kind: "pointer", type: "mouseMoved", ...point(event), button: button(event.button) }); }, { signal });
-    this.container.addEventListener("pointerup", (event) => { event.preventDefault(); send({ kind: "pointer", type: "mouseReleased", ...point(event), button: button(event.button), clickCount: event.detail || 1 }); }, { signal });
-    this.container.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.container.focus({ preventScroll: true });
-      const position = point(event);
-      this.options.onContextMenu?.({ clientX: event.clientX, clientY: event.clientY, ...position });
-    }, { signal });
-    this.container.addEventListener("wheel", (event) => { event.preventDefault(); send({ kind: "wheel", ...point(event), deltaX: event.deltaX, deltaY: event.deltaY }); }, { passive: false, signal });
-    this.container.addEventListener("compositionstart", () => { this.composing = true; }, { signal });
-    this.container.addEventListener("compositionend", (event) => { this.composing = false; if (event.data) send({ kind: "text", text: event.data }); }, { signal });
-    this.container.addEventListener("paste", (event) => { const text = event.clipboardData?.getData("text/plain"); if (text) { event.preventDefault(); send({ kind: "text", text }); } }, { signal });
-    this.container.addEventListener("keydown", (event) => {
-      event.preventDefault();
-      const options = { code: event.code || undefined, modifiers: modifiers(event), location: event.location };
-      send({ kind: "key", type: "keyDown", key: event.key, ...options });
-      if (!this.composing && !event.ctrlKey && !event.metaKey && !event.altKey && Array.from(event.key).length === 1) send({ kind: "key", type: "char", key: event.key, ...options });
-    }, { signal });
-    this.container.addEventListener("keyup", (event) => { event.preventDefault(); send({ kind: "key", type: "keyUp", key: event.key, code: event.code || undefined, modifiers: modifiers(event), location: event.location }); }, { signal });
+  async reloadInWorkspace(tabId?: number): Promise<void> {
+    await this.request("workspaceReload", { tabId });
   }
 
-  private report(error: unknown): void { this.options.onError?.(error instanceof Error ? error : new Error(String(error))); }
-}
-
-/**
- * A narrow automation facade for AI applications. Every operation is routed through the active
- * managed workspace, and the extension rejects it unless the user enabled agent control there.
- * It controls Chrome tabs created for the application; it does not provide operating-system control.
- */
-export class ManagedBrowserAgent {
-  private readonly activity: AgentActivityEntry[] = [];
-  private readonly limit: number;
-
-  constructor(private readonly client: RealBrowserClient, private readonly options: Omit<ManagedBrowserAgentOptions, "client"> = {}) {
-    this.limit = Math.max(10, Math.min(1_000, Math.round(options.maxActivityEntries ?? 100)));
+  async backInWorkspace(tabId?: number): Promise<void> {
+    await this.request("workspaceBack", { tabId });
   }
 
-  execute(operation: AgentOperation): Promise<unknown> { return this.run(operation); }
-  open(url: string, active = true): Promise<unknown> { return this.execute({ type: "open", url, active }); }
-  navigate(tabId: number, url: string): Promise<unknown> { return this.execute({ type: "navigate", tabId, url }); }
-  activate(tabId: number): Promise<unknown> { return this.execute({ type: "activate", tabId }); }
-  reload(tabId: number): Promise<unknown> { return this.execute({ type: "reload", tabId }); }
-  back(tabId: number): Promise<unknown> { return this.execute({ type: "back", tabId }); }
-  forward(tabId: number): Promise<unknown> { return this.execute({ type: "forward", tabId }); }
-  duplicate(tabId: number, active = true): Promise<unknown> { return this.execute({ type: "duplicate", tabId, active }); }
-  pin(tabId: number, pinned = true): Promise<unknown> { return this.execute({ type: "pin", tabId, pinned }); }
-  mute(tabId: number, muted = true): Promise<unknown> { return this.execute({ type: "mute", tabId, muted }); }
-  close(tabId: number): Promise<unknown> { return this.execute({ type: "close", tabId }); }
-  snapshot(): Promise<ManagedWorkspaceSnapshot> { return this.client.workspaceSnapshot(); }
-  observe(tabId?: number, options: AgentObserveOptions = {}): Promise<SharedTabScreenshot> { return this.client.screenshot(tabId, options); }
-  type(text: string, tabId?: number): Promise<{ ok: true }> {
-    return this.run({ type: "input", ...(tabId ? { tabId } : {}), input: { kind: "text", text } }) as Promise<{ ok: true }>;
-  }
-  press(key: string, options: KeyPressOptions = {}, tabId?: number): Promise<{ ok: true }> {
-    return this.keySequence(key, options, tabId);
-  }
-  async selectAll(tabId?: number): Promise<{ ok: true }> { return this.keySequence("a", { code: "KeyA", modifiers: 2 }, tabId); }
-  async clear(tabId?: number): Promise<{ ok: true }> {
-    await this.selectAll(tabId);
-    return this.keySequence("Backspace", { code: "Backspace" }, tabId);
-  }
-  scroll(deltaY: number, deltaX = 0, tabId?: number, x = 0, y = 0): Promise<{ ok: true }> {
-    return this.agentInput({ kind: "wheel", x, y, deltaX, deltaY }, tabId);
-  }
-  scrollUp(amount = 520, tabId?: number, x = 0, y = 0): Promise<{ ok: true }> { return this.scroll(-Math.abs(amount), 0, tabId, x, y); }
-  scrollDown(amount = 520, tabId?: number, x = 0, y = 0): Promise<{ ok: true }> { return this.scroll(Math.abs(amount), 0, tabId, x, y); }
-  click(x: number, y: number, tabId?: number): Promise<{ ok: true }> {
-    return this.pointerSequence(x, y, 1, tabId);
-  }
-  doubleClick(x: number, y: number, tabId?: number): Promise<{ ok: true }> { return this.pointerSequence(x, y, 2, tabId); }
-  tripleClick(x: number, y: number, tabId?: number): Promise<{ ok: true }> { return this.pointerSequence(x, y, 3, tabId); }
-  rightClick(x: number, y: number, tabId?: number): Promise<{ ok: true }> { return this.pointerSequence(x, y, 1, tabId, "right"); }
-  hover(x: number, y: number, tabId?: number): Promise<{ ok: true }> { return this.agentInput({ kind: "pointer", type: "mouseMoved", x, y }, tabId); }
-  async drag(fromX: number, fromY: number, toX: number, toY: number, tabId?: number): Promise<{ ok: true }> {
-    await this.hover(fromX, fromY, tabId);
-    await this.agentInput({ kind: "pointer", type: "mousePressed", x: fromX, y: fromY, button: "left", clickCount: 1 }, tabId);
-    await this.hover(toX, toY, tabId);
-    return this.agentInput({ kind: "pointer", type: "mouseReleased", x: toX, y: toY, button: "left", clickCount: 1 }, tabId);
-  }
-  async longPress(x: number, y: number, durationMs = 600, tabId?: number): Promise<{ ok: true }> {
-    await this.agentInput({ kind: "pointer", type: "mousePressed", x, y, button: "left", clickCount: 1 }, tabId);
-    await this.wait(Math.max(120, Math.min(5_000, durationMs)));
-    return this.agentInput({ kind: "pointer", type: "mouseReleased", x, y, button: "left", clickCount: 1 }, tabId);
-  }
-  copy(tabId?: number): Promise<{ ok: true }> { return this.keySequence("c", { code: "KeyC", modifiers: 2 }, tabId); }
-  cut(tabId?: number): Promise<{ ok: true }> { return this.keySequence("x", { code: "KeyX", modifiers: 2 }, tabId); }
-  paste(text: string, tabId?: number): Promise<{ ok: true }> { return this.type(text, tabId); }
-  undo(tabId?: number): Promise<{ ok: true }> { return this.keySequence("z", { code: "KeyZ", modifiers: 2 }, tabId); }
-  redo(tabId?: number): Promise<{ ok: true }> { return this.keySequence("y", { code: "KeyY", modifiers: 2 }, tabId); }
-  find(tabId?: number): Promise<{ ok: true }> { return this.keySequence("f", { code: "KeyF", modifiers: 2 }, tabId); }
-  confirm(tabId?: number): Promise<{ ok: true }> { return this.press("Enter", { code: "Enter" }, tabId); }
-  cancel(tabId?: number): Promise<{ ok: true }> { return this.press("Escape", { code: "Escape" }, tabId); }
-  toggle(tabId?: number): Promise<{ ok: true }> { return this.press(" ", { code: "Space" }, tabId); }
-  save(tabId?: number): Promise<{ ok: true }> { return this.keySequence("s", { code: "KeyS", modifiers: 2 }, tabId); }
-  print(tabId?: number): Promise<{ ok: true }> { return this.keySequence("p", { code: "KeyP", modifiers: 2 }, tabId); }
-  zoomIn(tabId?: number): Promise<{ ok: true }> { return this.keySequence("+", { code: "Equal", modifiers: 2 }, tabId); }
-  zoomOut(tabId?: number): Promise<{ ok: true }> { return this.keySequence("-", { code: "Minus", modifiers: 2 }, tabId); }
-  resetZoom(tabId?: number): Promise<{ ok: true }> { return this.keySequence("0", { code: "Digit0", modifiers: 2 }, tabId); }
-  wait(milliseconds: number): Promise<void> { return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Math.min(30_000, Math.round(milliseconds))))); }
-  getActivityLog(): readonly AgentActivityEntry[] { return this.activity.map((entry) => ({ ...entry })); }
-  clearActivityLog(): void { this.activity.splice(0); }
-
-  private agentInput(input: SharedTabInput, tabId?: number): Promise<{ ok: true }> {
-    return this.run({ type: "input", ...(tabId ? { tabId } : {}), input }) as Promise<{ ok: true }>;
+  async forwardInWorkspace(tabId?: number): Promise<void> {
+    await this.request("workspaceForward", { tabId });
   }
 
-  private async run(operation: AgentOperation): Promise<unknown> {
-    const entry: AgentActivityEntry = { id: `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, operation, status: "started", startedAt: Date.now() };
-    this.record(entry);
+  async renameWorkspace(label: string): Promise<ManagedBrowserWorkspace> {
+    return this.request<ManagedBrowserWorkspace>("workspaceRename", { label });
+  }
+
+  async pinWorkspaceTab(tabId: number, pinned = true): Promise<BrowserTab> {
+    return this.request<BrowserTab>("workspacePinTab", { tabId, pinned });
+  }
+
+  async muteWorkspaceTab(tabId: number, muted = true): Promise<BrowserTab> {
+    return this.request<BrowserTab>("workspaceMuteTab", { tabId, muted });
+  }
+
+  async duplicateWorkspaceTab(tabId: number): Promise<BrowserTab> {
+    return this.request<BrowserTab>("workspaceDuplicateTab", { tabId });
+  }
+
+  async closeWorkspaceTab(tabId: number): Promise<void> {
+    await this.request("workspaceCloseTab", { tabId });
+  }
+
+  async closeWorkspace(): Promise<void> {
+    await this.request("workspaceClose");
+    this.workspaceId = undefined;
+  }
+
+  async setAgentControl(enabled: boolean): Promise<ManagedBrowserWorkspace> {
+    return this.request<ManagedBrowserWorkspace>("workspaceSetAgentControl", {
+      enabled,
+    });
+  }
+
+  async screenshot(options?: {
+    tabId?: number;
+    format?: "png" | "jpeg";
+    quality?: number;
+  }): Promise<SharedTabScreenshot> {
+    return this.request<SharedTabScreenshot>("workspaceScreenshot", options ?? {});
+  }
+
+  async zoomScreenshot(
+    region: [number, number, number, number],
+    options?: { tabId?: number; coordinateSpace?: "normalized_1000" | "pixels" }
+  ): Promise<SharedTabScreenshot> {
+    return this.request<SharedTabScreenshot>("workspaceZoomScreenshot", {
+      region,
+      coordinateSpace: options?.coordinateSpace ?? "pixels",
+      tabId: options?.tabId,
+    });
+  }
+
+  async cursorPosition(tabId?: number): Promise<{ x: number; y: number }> {
+    return this.request<{ x: number; y: number }>("workspaceCursorPosition", {
+      tabId,
+    });
+  }
+
+  async getInteractiveElements(tabId?: number): Promise<InteractiveDomElement[]> {
+    return this.request<InteractiveDomElement[]>("workspaceInteractiveElements", {
+      tabId,
+    });
+  }
+
+  async getPageText(tabId?: number): Promise<{ title: string; url: string; text: string }> {
+    return this.request<{ title: string; url: string; text: string }>(
+      "workspacePageText",
+      { tabId }
+    );
+  }
+
+  async setWindowMode(mode: BrowserWindowMode, tabId?: number): Promise<void> {
+    await this.request("workspaceWindowMode", { mode, tabId });
+  }
+
+  async setZoom(zoomFactor: number, tabId?: number): Promise<{ zoomFactor: number }> {
+    return this.request<{ zoomFactor: number }>("workspaceSetZoom", {
+      zoomFactor,
+      tabId,
+    });
+  }
+
+  async printPdf(tabId?: number): Promise<{ base64: string; mimeType: "application/pdf" }> {
+    return this.request<{ base64: string; mimeType: "application/pdf" }>(
+      "workspacePrintPdf",
+      { tabId }
+    );
+  }
+
+  async input(input: SharedTabInput, tabId?: number): Promise<void> {
+    await this.request("workspaceInput", { input, tabId });
+  }
+
+  async typeText(text: string, tabId?: number): Promise<void> {
+    await this.input({ type: "text", text }, tabId);
+  }
+
+  async pressKey(key: string, tabId?: number): Promise<void> {
+    await this.input({ type: "key", action: "press", key }, tabId);
+  }
+
+  async agentExecute(operation: AgentOperation): Promise<AgentExecutionResult> {
+    return this.request<AgentExecutionResult>(
+      "agentExecute",
+      operation as unknown as Record<string, unknown>
+    );
+  }
+
+  async getConnectionDiagnostic(): Promise<ConnectionDiagnostic> {
+    const ctx = getEmbeddedApplicationContext();
     try {
-      const result = await this.client.agentExecute(operation);
-      entry.status = "succeeded";
-      entry.completedAt = Date.now();
-      this.options.onActivity?.({ ...entry });
-      return result;
-    } catch (error) {
-      entry.status = "failed";
-      entry.completedAt = Date.now();
-      entry.error = error instanceof Error ? error.message : String(error);
-      this.options.onActivity?.({ ...entry });
-      throw error;
+      const st = await this.status();
+      return {
+        connected: Boolean(st.installed),
+        embeddedInIframe: ctx.embeddedInIframe,
+        origin: ctx.origin,
+        extensionInstalled: Boolean(st.installed),
+        bridgeVersion: st.bridgeVersion ?? BRIDGE_VERSION,
+        workspaceId: this.workspaceId,
+      };
+    } catch (err) {
+      return {
+        connected: false,
+        embeddedInIframe: ctx.embeddedInIframe,
+        origin: ctx.origin,
+        extensionInstalled: false,
+        workspaceId: this.workspaceId,
+        error: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 
-  private record(entry: AgentActivityEntry): void {
-    this.activity.push(entry);
-    if (this.activity.length > this.limit) this.activity.splice(0, this.activity.length - this.limit);
-    this.options.onActivity?.({ ...entry });
+  onTabEvent(listener: (event: BrowserEvent) => void): () => void {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
   }
 
-  private async keySequence(key: string, options: KeyPressOptions, tabId?: number): Promise<{ ok: true }> {
-    await this.agentInput({ kind: "key", type: "keyDown", key, ...options }, tabId);
-    return this.agentInput({ kind: "key", type: "keyUp", key, ...options }, tabId);
-  }
-
-  private async pointerSequence(x: number, y: number, clickCount: number, tabId?: number, button: "left" | "middle" | "right" = "left"): Promise<{ ok: true }> {
-    await this.agentInput({ kind: "pointer", type: "mousePressed", x, y, button, clickCount }, tabId);
-    return this.agentInput({ kind: "pointer", type: "mouseReleased", x, y, button, clickCount }, tabId);
+  dispose(): void {
+    if (typeof window !== "undefined" && this.messageListener) {
+      window.removeEventListener("message", this.messageListener);
+      this.messageListener = undefined;
+    }
+    for (const entry of this.pending.values()) {
+      clearTimeout(entry.timer);
+      entry.reject(new Error("RealBrowserClient disposed"));
+    }
+    this.pending.clear();
+    this.eventListeners.clear();
   }
 }
 
-export function createRealBrowserClient(options: RealBrowserClientOptions = {}): RealBrowserClient { return new RealBrowserClient(options); }
-export function createManagedBrowserAgent(options: ManagedBrowserAgentOptions): ManagedBrowserAgent {
-  return new ManagedBrowserAgent(options.client, { maxActivityEntries: options.maxActivityEntries, onActivity: options.onActivity });
+export function createEmbeddedBrowserClient(
+  options?: RealBrowserClientOptions
+): RealBrowserClient {
+  return new RealBrowserClient(options);
+}
+
+export type RenderProfile = "responsive" | "balanced" | "sharp";
+
+const RENDER_PROFILE_CONFIG: Record<
+  RenderProfile,
+  { intervalMs: number; format: "png" | "jpeg"; quality?: number }
+> = {
+  responsive: { intervalMs: 180, format: "jpeg", quality: 58 },
+  balanced: { intervalMs: 300, format: "jpeg", quality: 78 },
+  sharp: { intervalMs: 450, format: "png" },
+};
+
+export interface SharedTabViewerOptions {
+  client: RealBrowserClient;
+  container: HTMLElement;
+  tabId?: number;
+  renderProfile?: RenderProfile;
+  intervalMs?: number;
+  pauseWhenHidden?: boolean;
+}
+
+export class SharedTabViewer {
+  private readonly client: RealBrowserClient;
+  private readonly container: HTMLElement;
+  private readonly img: HTMLImageElement;
+  private readonly profile: RenderProfile;
+  private readonly intervalMs: number;
+  private readonly pauseWhenHidden: boolean;
+  private tabId?: number;
+  private timer?: ReturnType<typeof setInterval>;
+  private lastShot?: SharedTabScreenshot;
+
+  constructor(options: SharedTabViewerOptions) {
+    this.client = options.client;
+    this.container = options.container;
+    this.tabId = options.tabId;
+    this.profile = options.renderProfile ?? "balanced";
+    const cfg = RENDER_PROFILE_CONFIG[this.profile];
+    this.intervalMs = Math.max(120, options.intervalMs ?? cfg.intervalMs);
+    this.pauseWhenHidden = options.pauseWhenHidden ?? true;
+
+    this.img = document.createElement("img");
+    this.img.style.width = "100%";
+    this.img.style.height = "100%";
+    this.img.style.objectFit = "contain";
+    this.img.style.display = "block";
+    this.img.tabIndex = 0;
+    this.container.appendChild(this.img);
+
+    this.bindInputEvents();
+  }
+
+  private mapPointerCoords(e: MouseEvent): { x: number; y: number } | null {
+    if (!this.lastShot) return null;
+    const rect = this.img.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const scaleX = this.lastShot.width / rect.width;
+    const scaleY = this.lastShot.height / rect.height;
+    return {
+      x: Math.round((e.clientX - rect.left) * scaleX),
+      y: Math.round((e.clientY - rect.top) * scaleY),
+    };
+  }
+
+  private bindInputEvents(): void {
+    this.img.addEventListener("click", (e) => {
+      const coords = this.mapPointerCoords(e);
+      if (!coords) return;
+      void this.client.input(
+        { type: "pointer", action: "click", x: coords.x, y: coords.y, button: "left" },
+        this.tabId
+      );
+    });
+    this.img.addEventListener("wheel", (e) => {
+      const coords = this.mapPointerCoords(e);
+      if (!coords) return;
+      void this.client.input(
+        {
+          type: "wheel",
+          x: coords.x,
+          y: coords.y,
+          deltaX: e.deltaX,
+          deltaY: e.deltaY,
+        },
+        this.tabId
+      );
+    });
+    this.img.addEventListener("keydown", (e) => {
+      void this.client.input(
+        { type: "key", action: "press", key: e.key },
+        this.tabId
+      );
+    });
+  }
+
+  start(): void {
+    if (this.timer) return;
+    const cfg = RENDER_PROFILE_CONFIG[this.profile];
+    const tick = async () => {
+      if (this.pauseWhenHidden && typeof document !== "undefined" && document.hidden) {
+        return;
+      }
+      try {
+        const shot = await this.client.screenshot({
+          tabId: this.tabId,
+          format: cfg.format,
+          quality: cfg.quality,
+        });
+        this.lastShot = shot;
+        this.img.src = shot.dataUrl;
+      } catch {
+        // ignore transient frame capture errors
+      }
+    };
+    void tick();
+    this.timer = setInterval(tick, this.intervalMs);
+  }
+
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+  }
+
+  dispose(): void {
+    this.stop();
+    this.img.remove();
+  }
+}
+
+export interface ManagedBrowserAgentOptions {
+  client: RealBrowserClient;
+  safety?: SafetyPolicyConfig | SafetyPolicyEngine;
+}
+
+export class ManagedBrowserAgent {
+  private readonly client: RealBrowserClient;
+  private readonly safety: SafetyPolicyEngine;
+  private readonly activityLog: AgentAuditEntry[] = [];
+
+  constructor(options: ManagedBrowserAgentOptions | RealBrowserClient) {
+    if (options instanceof RealBrowserClient) {
+      this.client = options;
+      this.safety = new SafetyPolicyEngine();
+    } else {
+      this.client = options.client;
+      this.safety =
+        options.safety instanceof SafetyPolicyEngine
+          ? options.safety
+          : new SafetyPolicyEngine(options.safety);
+    }
+  }
+
+  async executeComputerAction(
+    action: UnifiedComputerAction | Record<string, unknown>,
+    options?: {
+      tabId?: number;
+      provider?: "gemini" | "anthropic" | "openai" | "generic";
+      callId?: string;
+      safetyAcknowledged?: boolean;
+    }
+  ): Promise<AgentExecutionResult> {
+    const unified = action as UnifiedComputerAction;
+    const decision = this.safety.evaluateAction(unified);
+    if (decision.decision === "blocked") {
+      const blocked: AgentExecutionResult = {
+        ok: false,
+        actionType: unified.type,
+        tabId: options?.tabId ?? 0,
+        url: "",
+        error: decision.explanation ?? "Action blocked by safety policy",
+        durationMs: 0,
+      };
+      this.activityLog.push({
+        timestamp: Date.now(),
+        provider: options?.provider ?? "generic",
+        actionType: unified.type,
+        intent: unified.intent,
+        safetyDecision: decision,
+        ok: false,
+        error: blocked.error,
+        durationMs: 0,
+      });
+      return blocked;
+    }
+
+    const result = await this.client.agentExecute({
+      action: unified,
+      tabId: options?.tabId,
+      provider: options?.provider ?? "generic",
+      callId: options?.callId,
+      intent: unified.intent,
+      safetyDecision: decision,
+      safetyAcknowledged: options?.safetyAcknowledged,
+    });
+
+    this.activityLog.push({
+      timestamp: Date.now(),
+      provider: options?.provider ?? "generic",
+      actionType: unified.type,
+      intent: unified.intent,
+      url: result.url,
+      safetyDecision: decision,
+      userApproved: options?.safetyAcknowledged,
+      ok: result.ok,
+      error: result.error,
+      durationMs: result.durationMs,
+    });
+
+    return result;
+  }
+
+  async execute(action: UnifiedComputerAction, tabId?: number): Promise<AgentExecutionResult> {
+    return this.executeComputerAction(action, { tabId });
+  }
+
+  async open(url: string, active = true): Promise<BrowserTab> {
+    const check = this.safety.isUrlAllowed(url);
+    if (!check.allowed) throw new Error(check.reason);
+    return this.client.openInWorkspace(url, active);
+  }
+
+  async navigate(url: string, tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "navigate", url }, tabId);
+  }
+
+  async activate(tabId: number): Promise<BrowserTab> {
+    return this.client.activateInWorkspace(tabId);
+  }
+
+  async reload(tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "reload" }, tabId);
+  }
+
+  async back(tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "go_back" }, tabId);
+  }
+
+  async forward(tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "go_forward" }, tabId);
+  }
+
+  async duplicate(tabId: number): Promise<BrowserTab> {
+    return this.client.duplicateWorkspaceTab(tabId);
+  }
+
+  async pin(tabId: number, pinned = true): Promise<BrowserTab> {
+    return this.client.pinWorkspaceTab(tabId, pinned);
+  }
+
+  async mute(tabId: number, muted = true): Promise<BrowserTab> {
+    return this.client.muteWorkspaceTab(tabId, muted);
+  }
+
+  async close(tabId: number): Promise<void> {
+    return this.client.closeWorkspaceTab(tabId);
+  }
+
+  async snapshot(): Promise<ManagedWorkspaceSnapshot> {
+    return this.client.workspaceSnapshot();
+  }
+
+  async observe(tabId?: number): Promise<SharedTabScreenshot> {
+    return this.client.screenshot({ tabId, format: "png" });
+  }
+
+  async observeRich(tabId?: number): Promise<{
+    screenshot: SharedTabScreenshot;
+    elements: InteractiveDomElement[];
+    pageText: { title: string; url: string; text: string };
+  }> {
+    const [screenshot, elements, pageText] = await Promise.all([
+      this.client.screenshot({ tabId, format: "png" }),
+      this.client.getInteractiveElements(tabId),
+      this.client.getPageText(tabId),
+    ]);
+    return { screenshot, elements, pageText };
+  }
+
+  async getInteractiveElements(tabId?: number): Promise<InteractiveDomElement[]> {
+    return this.client.getInteractiveElements(tabId);
+  }
+
+  async getPageText(tabId?: number): Promise<{ title: string; url: string; text: string }> {
+    return this.client.getPageText(tabId);
+  }
+
+  async screenshot(options?: {
+    tabId?: number;
+    format?: "png" | "jpeg";
+    quality?: number;
+  }): Promise<SharedTabScreenshot> {
+    return this.client.screenshot(options);
+  }
+
+  async zoom(
+    region: [number, number, number, number],
+    tabId?: number,
+    coordinateSpace: "normalized_1000" | "pixels" = "pixels"
+  ): Promise<SharedTabScreenshot> {
+    return this.client.zoomScreenshot(region, { tabId, coordinateSpace });
+  }
+
+  async cursorPosition(tabId?: number): Promise<{ x: number; y: number }> {
+    return this.client.cursorPosition(tabId);
+  }
+
+  async windowMode(mode: BrowserWindowMode, tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "window_mode", mode }, tabId);
+  }
+
+  async setZoom(zoomFactor: number, tabId?: number): Promise<{ zoomFactor: number }> {
+    return this.client.setZoom(zoomFactor, tabId);
+  }
+
+  async zoomReset(tabId?: number): Promise<{ zoomFactor: number }> {
+    return this.client.setZoom(1, tabId);
+  }
+
+  async printPdf(tabId?: number): Promise<{ base64: string; mimeType: "application/pdf" }> {
+    return this.client.printPdf(tabId);
+  }
+
+  async clickSelector(selector: string, tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "click_selector", selector }, tabId);
+  }
+
+  async typeSelector(
+    selector: string,
+    text: string,
+    options?: { pressEnter?: boolean; clearFirst?: boolean; tabId?: number }
+  ): Promise<AgentExecutionResult> {
+    return this.execute(
+      {
+        type: "type_selector",
+        selector,
+        text,
+        pressEnter: options?.pressEnter,
+        clearFirst: options?.clearFirst,
+      },
+      options?.tabId
+    );
+  }
+
+  async selectOption(
+    selector: string,
+    value: string,
+    tabId?: number
+  ): Promise<AgentExecutionResult> {
+    return this.execute({ type: "select_option", selector, value }, tabId);
+  }
+
+  async findInPage(query: string, tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "find_in_page", query }, tabId);
+  }
+
+  async scrollToTop(tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "scroll_to", target: "top" }, tabId);
+  }
+
+  async scrollToBottom(tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "scroll_to", target: "bottom" }, tabId);
+  }
+
+  async scrollToElement(selector: string, tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "scroll_to", target: "selector", selector }, tabId);
+  }
+
+  async click(
+    x: number,
+    y: number,
+    options?: {
+      coordinateSpace?: "normalized_1000" | "pixels";
+      modifiers?: ModifierKey[];
+      tabId?: number;
+      intent?: string;
+    }
+  ): Promise<AgentExecutionResult> {
+    return this.execute(
+      {
+        type: "click",
+        x,
+        y,
+        coordinateSpace: options?.coordinateSpace ?? "pixels",
+        modifiers: options?.modifiers,
+        intent: options?.intent,
+      },
+      options?.tabId
+    );
+  }
+
+  async doubleClick(
+    x: number,
+    y: number,
+    options?: {
+      coordinateSpace?: "normalized_1000" | "pixels";
+      modifiers?: ModifierKey[];
+      tabId?: number;
+    }
+  ): Promise<AgentExecutionResult> {
+    return this.execute(
+      {
+        type: "double_click",
+        x,
+        y,
+        coordinateSpace: options?.coordinateSpace ?? "pixels",
+        modifiers: options?.modifiers,
+      },
+      options?.tabId
+    );
+  }
+
+  async tripleClick(
+    x: number,
+    y: number,
+    options?: {
+      coordinateSpace?: "normalized_1000" | "pixels";
+      modifiers?: ModifierKey[];
+      tabId?: number;
+    }
+  ): Promise<AgentExecutionResult> {
+    return this.execute(
+      {
+        type: "triple_click",
+        x,
+        y,
+        coordinateSpace: options?.coordinateSpace ?? "pixels",
+        modifiers: options?.modifiers,
+      },
+      options?.tabId
+    );
+  }
+
+  async rightClick(
+    x: number,
+    y: number,
+    options?: {
+      coordinateSpace?: "normalized_1000" | "pixels";
+      modifiers?: ModifierKey[];
+      tabId?: number;
+    }
+  ): Promise<AgentExecutionResult> {
+    return this.execute(
+      {
+        type: "right_click",
+        x,
+        y,
+        coordinateSpace: options?.coordinateSpace ?? "pixels",
+        modifiers: options?.modifiers,
+      },
+      options?.tabId
+    );
+  }
+
+  async middleClick(
+    x: number,
+    y: number,
+    options?: {
+      coordinateSpace?: "normalized_1000" | "pixels";
+      modifiers?: ModifierKey[];
+      tabId?: number;
+    }
+  ): Promise<AgentExecutionResult> {
+    return this.execute(
+      {
+        type: "middle_click",
+        x,
+        y,
+        coordinateSpace: options?.coordinateSpace ?? "pixels",
+        modifiers: options?.modifiers,
+      },
+      options?.tabId
+    );
+  }
+
+  async mouseDown(x?: number, y?: number, tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "mouse_down", x, y, coordinateSpace: "pixels" }, tabId);
+  }
+
+  async mouseUp(x?: number, y?: number, tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "mouse_up", x, y, coordinateSpace: "pixels" }, tabId);
+  }
+
+  async hover(
+    x: number,
+    y: number,
+    coordinateSpace: "normalized_1000" | "pixels" = "pixels",
+    tabId?: number
+  ): Promise<AgentExecutionResult> {
+    return this.execute({ type: "move", x, y, coordinateSpace }, tabId);
+  }
+
+  async drag(
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    options?: {
+      coordinateSpace?: "normalized_1000" | "pixels";
+      modifiers?: ModifierKey[];
+      tabId?: number;
+    }
+  ): Promise<AgentExecutionResult> {
+    return this.execute(
+      {
+        type: "drag_and_drop",
+        startX,
+        startY,
+        endX,
+        endY,
+        coordinateSpace: options?.coordinateSpace ?? "pixels",
+        modifiers: options?.modifiers,
+      },
+      options?.tabId
+    );
+  }
+
+  async longPress(
+    x: number,
+    y: number,
+    seconds = 2,
+    coordinateSpace: "normalized_1000" | "pixels" = "pixels",
+    tabId?: number
+  ): Promise<AgentExecutionResult> {
+    return this.execute(
+      { type: "long_press", x, y, seconds, coordinateSpace },
+      tabId
+    );
+  }
+
+  async type(
+    text: string,
+    options?: {
+      x?: number;
+      y?: number;
+      coordinateSpace?: "normalized_1000" | "pixels";
+      pressEnter?: boolean;
+      clearFirst?: boolean;
+      tabId?: number;
+    }
+  ): Promise<AgentExecutionResult> {
+    return this.execute(
+      {
+        type: "type",
+        text,
+        x: options?.x,
+        y: options?.y,
+        coordinateSpace: options?.coordinateSpace ?? "pixels",
+        pressEnter: options?.pressEnter,
+        clearFirst: options?.clearFirst,
+      },
+      options?.tabId
+    );
+  }
+
+  async press(key: string, repeat = 1, tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "press_key", key, repeat }, tabId);
+  }
+
+  async keyDown(key: string, tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "key_down", key }, tabId);
+  }
+
+  async keyUp(key: string, tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "key_up", key }, tabId);
+  }
+
+  async holdKey(key: string, seconds: number, tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "hold_key", key, seconds }, tabId);
+  }
+
+  async hotkey(keys: string[], tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "hotkey", keys }, tabId);
+  }
+
+  async scroll(
+    direction: ScrollDirection = "down",
+    magnitudeInPixels = 300,
+    options?: {
+      x?: number;
+      y?: number;
+      coordinateSpace?: "normalized_1000" | "pixels";
+      modifiers?: ModifierKey[];
+      tabId?: number;
+    }
+  ): Promise<AgentExecutionResult> {
+    return this.execute(
+      {
+        type: "scroll",
+        direction,
+        magnitudeInPixels,
+        x: options?.x,
+        y: options?.y,
+        coordinateSpace: options?.coordinateSpace ?? "pixels",
+        modifiers: options?.modifiers,
+      },
+      options?.tabId
+    );
+  }
+
+  async scrollUp(magnitudeInPixels = 300, tabId?: number): Promise<AgentExecutionResult> {
+    return this.scroll("up", magnitudeInPixels, { tabId });
+  }
+
+  async scrollDown(magnitudeInPixels = 300, tabId?: number): Promise<AgentExecutionResult> {
+    return this.scroll("down", magnitudeInPixels, { tabId });
+  }
+
+  async wait(seconds = 1, tabId?: number): Promise<AgentExecutionResult> {
+    return this.execute({ type: "wait", seconds }, tabId);
+  }
+
+  async selectAll(tabId?: number): Promise<AgentExecutionResult> {
+    return this.hotkey(["Control", "A"], tabId);
+  }
+
+  async clear(tabId?: number): Promise<AgentExecutionResult> {
+    await this.selectAll(tabId);
+    return this.press("Backspace", 1, tabId);
+  }
+
+  async copy(tabId?: number): Promise<AgentExecutionResult> {
+    return this.hotkey(["Control", "C"], tabId);
+  }
+
+  async cut(tabId?: number): Promise<AgentExecutionResult> {
+    return this.hotkey(["Control", "X"], tabId);
+  }
+
+  async paste(tabId?: number): Promise<AgentExecutionResult> {
+    return this.hotkey(["Control", "V"], tabId);
+  }
+
+  async undo(tabId?: number): Promise<AgentExecutionResult> {
+    return this.hotkey(["Control", "Z"], tabId);
+  }
+
+  async redo(tabId?: number): Promise<AgentExecutionResult> {
+    return this.hotkey(["Control", "Shift", "Z"], tabId);
+  }
+
+  async find(tabId?: number): Promise<AgentExecutionResult> {
+    return this.hotkey(["Control", "F"], tabId);
+  }
+
+  async save(tabId?: number): Promise<AgentExecutionResult> {
+    return this.hotkey(["Control", "S"], tabId);
+  }
+
+  async print(tabId?: number): Promise<AgentExecutionResult> {
+    return this.hotkey(["Control", "P"], tabId);
+  }
+
+  async zoomIn(tabId?: number): Promise<AgentExecutionResult> {
+    return this.hotkey(["Control", "="], tabId);
+  }
+
+  async zoomOut(tabId?: number): Promise<AgentExecutionResult> {
+    return this.hotkey(["Control", "-"], tabId);
+  }
+
+  async confirm(tabId?: number): Promise<AgentExecutionResult> {
+    return this.press("Enter", 1, tabId);
+  }
+
+  async cancel(tabId?: number): Promise<AgentExecutionResult> {
+    return this.press("Escape", 1, tabId);
+  }
+
+  getActivityLog(): AgentAuditEntry[] {
+    return [...this.activityLog];
+  }
+}
+
+export function createManagedBrowserAgent(
+  options: ManagedBrowserAgentOptions | RealBrowserClient
+): ManagedBrowserAgent {
+  return new ManagedBrowserAgent(options);
 }

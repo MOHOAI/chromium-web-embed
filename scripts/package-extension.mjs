@@ -1,27 +1,24 @@
-import { createWriteStream } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { ZipArchive } from "archiver";
+import fs from "node:fs";
+import path from "node:path";
+import archiver from "archiver";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const source = resolve(root, "extension");
-const targetDirectory = resolve(root, "extension-download");
-const target = resolve(targetDirectory, "real-browser-web-bridge-extension.zip");
+const root = process.cwd();
+const extDir = path.join(root, "extension");
+const outDir = path.join(root, "extension-download");
+fs.mkdirSync(outDir, { recursive: true });
 
-await mkdir(targetDirectory, { recursive: true });
-await rm(target, { force: true });
+const outZip = path.join(outDir, "real-browser-web-bridge-extension.zip");
+const output = fs.createWriteStream(outZip);
+const archive = archiver("zip", { zlib: { level: 9 } });
 
-const output = createWriteStream(target);
-const archive = new ZipArchive({ zlib: { level: 9 } });
-
-await new Promise((resolvePromise, reject) => {
-  output.on("close", resolvePromise);
-  output.on("error", reject);
-  archive.on("error", reject);
-  archive.pipe(output);
-  archive.directory(source, false);
-  archive.finalize();
+output.on("close", () => {
+  console.log(`Packaged ${outZip} (${archive.pointer()} bytes)`);
 });
 
-console.log(`Extension download package created: ${target}`);
+archive.on("error", (err) => {
+  throw err;
+});
+
+archive.pipe(output);
+archive.directory(extDir, false);
+await archive.finalize();

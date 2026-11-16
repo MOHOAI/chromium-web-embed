@@ -1,12 +1,12 @@
-import { cp, mkdir } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import path from "node:path";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const extension = resolve(root, "extension");
-const files = ["extension-worker.js", "extension-bridge.js"];
+const root = process.cwd();
+const extDir = path.join(root, "extension");
+const manifestPath = path.join(extDir, "manifest.json");
+const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 
-await mkdir(extension, { recursive: true });
-for (const file of files) {
-  await cp(resolve(root, "dist", file), resolve(extension, file === "extension-worker.js" ? "service-worker.js" : "bridge.js"));
-}
+manifest.version = pkg.version;
+fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+console.log(`Prepared extension/manifest.json at v${manifest.version}`);

@@ -1,11 +1,16 @@
-import type { ManagedBrowserWorkspace } from "./protocol";
+import type { ManagedBrowserWorkspace } from "./protocol.js";
 
-/**
- * يحصر أوامر الوكيل في مساحة وافق مستخدم التطبيق على تفعيلها.
- * لا تتحقق هذه الدالة من ملكية التبويب؛ يتولاها عامل الإضافة قبل التنفيذ.
- */
-export function assertAgentControlEnabled(workspace: Pick<ManagedBrowserWorkspace, "agentControlEnabled">): void {
+export class AgentControlDisabledError extends Error {
+  constructor(workspaceId: string) {
+    super(
+      `Agent control is disabled for workspace "${workspaceId}". Enable it via setAgentControl(true) or the extension popup before executing AI actions.`
+    );
+    this.name = "AgentControlDisabledError";
+  }
+}
+
+export function assertAgentControlEnabled(workspace: ManagedBrowserWorkspace): void {
   if (!workspace.agentControlEnabled) {
-    throw new Error("Agent control is disabled for this workspace. The user must enable it first.");
+    throw new AgentControlDisabledError(workspace.id);
   }
 }

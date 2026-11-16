@@ -1,16 +1,16 @@
-import { defineConfig } from 'tsup';
+import { defineConfig } from "tsup";
 
 export default defineConfig({
   entry: {
-    index: 'src/index.ts',
-    extension: 'src/extension.ts',
-    'extension-worker': 'src/extension-worker.ts',
-    'extension-bridge': 'src/extension-bridge.ts'
+    index: "src/index.ts",
+    extension: "src/extension.ts",
+    "providers/index": "src/providers/index.ts",
+    "safety-policy": "src/safety-policy.ts",
+    "agent-runner": "src/agent-runner.ts",
   },
-  format: ['esm', 'cjs'],
+  format: ["esm", "cjs"],
   dts: true,
-  clean: true,
   sourcemap: true,
-  splitting: false,
-  outDir: 'dist'
+  clean: true,
+  target: "es2022",
 });

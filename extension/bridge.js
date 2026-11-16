@@ -1,71 +1,88 @@
-// src/protocol.ts
-var BRIDGE_CHANNEL = "real-browser-web/v3";
-var BRIDGE_VERSION = 3;
-var TAB_ACTIONS = [
-  "status",
-  "subscribe",
-  "workspaceCreate",
-  "workspaceGet",
-  "workspaceList",
-  "workspaceOpen",
-  "workspaceNavigate",
-  "workspaceActivate",
-  "workspaceReload",
-  "workspaceBack",
-  "workspaceForward",
-  "workspaceRename",
-  "workspacePinTab",
-  "workspaceMuteTab",
-  "workspaceDuplicateTab",
-  "workspaceCloseTab",
-  "workspaceClose",
-  "workspaceSetAgentControl",
-  "workspaceScreenshot",
-  "workspaceInput",
-  "agentExecute"
-];
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function isTabAction(value) {
-  return typeof value === "string" && TAB_ACTIONS.includes(value);
-}
-function isBridgeCommand(value) {
-  return isRecord(value) && value.channel === BRIDGE_CHANNEL && value.version === BRIDGE_VERSION && value.kind === "command" && typeof value.requestId === "string" && isTabAction(value.action) && (value.data === void 0 || isRecord(value.data));
-}
-function isBridgeEvent(value) {
-  return isRecord(value) && value.channel === BRIDGE_CHANNEL && value.version === BRIDGE_VERSION && value.kind === "event" && isRecord(value.event) && typeof value.event.type === "string";
-}
+(() => {
+  const BRIDGE_CHANNEL = "real-browser-web/v4";
+  const LEGACY_CHANNELS = ["real-browser-web/v3"];
+  const TAB_ACTIONS = new Set([
+    "status",
+    "subscribe",
+    "workspaceCreate",
+    "workspaceGet",
+    "workspaceList",
+    "workspaceOpen",
+    "workspaceNavigate",
+    "workspaceActivate",
+    "workspaceReload",
+    "workspaceBack",
+    "workspaceForward",
+    "workspaceRename",
+    "workspacePinTab",
+    "workspaceMuteTab",
+    "workspaceDuplicateTab",
+    "workspaceCloseTab",
+    "workspaceClose",
+    "workspaceSetAgentControl",
+    "workspaceScreenshot",
+    "workspaceZoomScreenshot",
+    "workspaceCursorPosition",
+    "workspaceInput",
+    "workspaceInteractiveElements",
+    "workspacePageText",
+    "workspaceWindowMode",
+    "workspaceSetZoom",
+    "workspacePrintPdf",
+    "agentExecute"
+  ]);
 
-// src/extension-bridge.ts
-var origin = window.location.origin;
-var extensionVersion = "3.0.0";
-var bridgeGlobal = globalThis;
-if (!bridgeGlobal.__realBrowserWebBridgeInstalled) {
-  bridgeGlobal.__realBrowserWebBridgeInstalled = true;
+  if (globalThis.__realBrowserWebBridgeInstalled) return;
+  globalThis.__realBrowserWebBridgeInstalled = true;
+
+  function isValidCommand(data) {
+    if (!data || typeof data !== "object") return false;
+    const validChannel =
+      data.channel === BRIDGE_CHANNEL || LEGACY_CHANNELS.includes(data.channel);
+    return (
+      validChannel &&
+      typeof data.id === "string" &&
+      typeof data.action === "string" &&
+      TAB_ACTIONS.has(data.action)
+    );
+  }
+
   window.addEventListener("message", (event) => {
-    if (event.source !== window || event.origin !== origin || !isBridgeCommand(event.data)) return;
+    if (event.source !== window) return;
+    if (!isValidCommand(event.data)) return;
+
     const command = event.data;
-    chrome.runtime.sendMessage(command, (message) => {
-      const error = chrome.runtime.lastError;
-      if (error || !message) {
-        window.postMessage({
-          channel: BRIDGE_CHANNEL,
-          version: BRIDGE_VERSION,
-          kind: "response",
-          requestId: command.requestId,
-          ok: false,
-          error: error?.message ?? "The browser extension is unavailable."
-        }, origin);
-        return;
+    chrome.runtime.sendMessage(
+      {
+        scope: "real-browser-bridge",
+        command
+      },
+      (response) => {
+        const runtimeError = chrome.runtime.lastError;
+        window.postMessage(
+          runtimeError
+            ? {
+                channel: command.channel || BRIDGE_CHANNEL,
+                id: command.id,
+                ok: false,
+                error: runtimeError.message
+              }
+            : response,
+          window.location.origin || "*"
+        );
       }
-      window.postMessage(message, origin);
-    });
+    );
   });
+
   chrome.runtime.onMessage.addListener((message) => {
-    if (isBridgeEvent(message)) window.postMessage(message, origin);
+    if (message && message.scope === "real-browser-event" && message.event) {
+      window.postMessage(
+        {
+          channel: BRIDGE_CHANNEL,
+          event: message.event
+        },
+        window.location.origin || "*"
+      );
+    }
   });
-}
-var ready = { channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "ready", extensionVersion };
-window.postMessage(ready, origin);
-//# sourceMappingURL=extension-bridge.js.map
+})();

@@ -1,599 +1,950 @@
-// src/protocol.ts
-var BRIDGE_CHANNEL = "real-browser-web/v3";
-var BRIDGE_VERSION = 3;
-var TAB_ACTIONS = [
-  "status",
-  "subscribe",
-  "workspaceCreate",
-  "workspaceGet",
-  "workspaceList",
-  "workspaceOpen",
-  "workspaceNavigate",
-  "workspaceActivate",
-  "workspaceReload",
-  "workspaceBack",
-  "workspaceForward",
-  "workspaceRename",
-  "workspacePinTab",
-  "workspaceMuteTab",
-  "workspaceDuplicateTab",
-  "workspaceCloseTab",
-  "workspaceClose",
-  "workspaceSetAgentControl",
-  "workspaceScreenshot",
-  "workspaceInput",
-  "agentExecute"
-];
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function isTabAction(value) {
-  return typeof value === "string" && TAB_ACTIONS.includes(value);
-}
-function isBridgeCommand(value) {
-  return isRecord(value) && value.channel === BRIDGE_CHANNEL && value.version === BRIDGE_VERSION && value.kind === "command" && typeof value.requestId === "string" && isTabAction(value.action) && (value.data === void 0 || isRecord(value.data));
-}
-function normalizeTabUrl(value) {
-  const input = value.trim();
-  if (!input) throw new TypeError("A URL is required.");
-  if (/^[a-z][a-z\d+.-]*:/i.test(input) && !/^https?:/i.test(input)) {
-    throw new TypeError("Only HTTP and HTTPS URLs are supported.");
-  }
-  const candidate = /^https?:\/\//i.test(input) ? input : `https://${input}`;
-  const url = new URL(candidate);
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new TypeError("Only HTTP and HTTPS URLs are supported.");
-  }
-  return url.href;
-}
+const BRIDGE_CHANNEL = "real-browser-web/v4";
+const EXTENSION_VERSION = "4.1.0";
+const STORAGE_KEY = "managedBrowserWorkspaces";
 
-// src/extension-core.ts
-function toBrowserTab(tab) {
-  if (!Number.isInteger(tab.id)) throw new Error("Chrome returned a tab without an identifier.");
-  const id = tab.id;
-  const windowId = Number.isInteger(tab.windowId) ? tab.windowId : -1;
-  const index = Number.isInteger(tab.index) ? tab.index : -1;
-  return {
-    id,
-    url: tab.url ?? tab.pendingUrl ?? "",
-    title: tab.title ?? "",
-    active: Boolean(tab.active),
-    windowId,
-    index,
-    ...tab.status ? { status: tab.status } : {},
-    pinned: Boolean(tab.pinned),
-    muted: Boolean(tab.mutedInfo?.muted),
-    audible: Boolean(tab.audible),
-    ...tab.favIconUrl ? { favIconUrl: tab.favIconUrl } : {}
-  };
-}
-function createExtensionStatus(version) {
-  return { available: true, version, capabilities: TAB_ACTIONS, model: "managed-workspace", privacy: "origin-isolated" };
-}
+const workspaces = new Map();
+const subscribers = new Set();
+const attachedDebuggerTabs = new Set();
+const cursorByTab = new Map();
 
-// src/extension-bridge-policy.ts
-function isSupportedWebAppUrl(value) {
+function safeOrigin(urlStr) {
   try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
+    const u = new URL(urlStr);
+    if (u.protocol === "http:" || u.protocol === "https:") return u.origin;
+  } catch {}
+  return null;
 }
 
-// src/extension-bridge-activation.ts
-var bridgeProbe = () => Boolean(globalThis.__realBrowserWebBridgeInstalled);
-var delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-async function ensureSiteBridge(api, tabId, options = {}) {
-  const tab = await api.tabs.get(tabId);
-  const url = tab.url ?? tab.pendingUrl ?? "";
-  if (!isSupportedWebAppUrl(url)) return { supported: false, injected: false, ready: false, url, attempts: 0 };
-  const attempts = Math.max(1, Math.min(5, Math.round(options.probeAttempts ?? 3)));
-  const pause = Math.max(0, Math.min(1e3, Math.round(options.probeDelayMs ?? 50)));
-  const probe = () => api.scripting.executeScript({ target: { tabId }, func: bridgeProbe, injectImmediately: true });
-  if (await probe().then((result) => result[0]?.result === true).catch(() => false)) return { supported: true, injected: false, ready: true, url, attempts: 1 };
-  await api.scripting.executeScript({ target: { tabId }, files: ["bridge.js"], injectImmediately: true });
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    if (await probe().then((result) => result[0]?.result === true).catch(() => false)) return { supported: true, injected: true, ready: true, url, attempts: attempt };
-    if (attempt < attempts && pause > 0) await delay(pause);
-  }
-  return { supported: true, injected: true, ready: false, url, attempts };
-}
-
-// src/agent-control-policy.ts
-function assertAgentControlEnabled(workspace) {
-  if (!workspace.agentControlEnabled) {
-    throw new Error("Agent control is disabled for this workspace. The user must enable it first.");
-  }
-}
-
-// src/extension-worker.ts
-var EXTENSION_VERSION = "3.0.0";
-var WORKSPACES_KEY = "managedBrowserWorkspaces";
-var subscribers = /* @__PURE__ */ new Map();
-var attachedDebuggerTabs = /* @__PURE__ */ new Set();
-var workspaces = /* @__PURE__ */ new Map();
-var restored = false;
-function safeOrigin(value) {
-  if (typeof value !== "string") return null;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : null;
-  } catch {
-    return null;
-  }
-}
 function pageOrigin(sender) {
-  const origin = safeOrigin(sender.origin ?? sender.url ?? sender.tab?.url ?? sender.tab?.pendingUrl);
-  if (!origin) throw new Error("Managed browser commands are allowed only from an approved HTTP(S) web page.");
-  return origin;
-}
-function workspaceId() {
-  return typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : `workspace-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-function label(value) {
-  if (typeof value !== "string") return "\u0645\u0633\u0627\u062D\u0629 \u0645\u062A\u0635\u0641\u062D \u0627\u0644\u062A\u0637\u0628\u064A\u0642";
-  const normalized = value.trim().slice(0, 60);
-  return normalized || "\u0645\u0633\u0627\u062D\u0629 \u0645\u062A\u0635\u0641\u062D \u0627\u0644\u062A\u0637\u0628\u064A\u0642";
-}
-function numberValue(data, name, fallback) {
-  const value = data[name] ?? fallback;
-  if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError(`${name} must be a finite number.`);
-  return value;
-}
-function workspaceData(value) {
-  if (!isRecord(value)) throw new TypeError("A managed workspace payload is required.");
-  return value;
-}
-async function restoreWorkspaces() {
-  if (restored) return;
-  restored = true;
-  try {
-    const stored = await chrome.storage.session.get(WORKSPACES_KEY);
-    const values = Array.isArray(stored?.[WORKSPACES_KEY]) ? stored[WORKSPACES_KEY] : [];
-    for (const candidate of values) {
-      if (!isRecord(candidate) || typeof candidate.id !== "string" || typeof candidate.origin !== "string" || !Array.isArray(candidate.tabIds)) continue;
-      const tabIds = candidate.tabIds.filter(Number.isInteger);
-      workspaces.set(candidate.id, {
-        id: candidate.id,
-        origin: candidate.origin,
-        groupId: typeof candidate.groupId === "number" ? candidate.groupId : null,
-        label: typeof candidate.label === "string" ? candidate.label : "\u0645\u0633\u0627\u062D\u0629 \u0645\u062A\u0635\u0641\u062D \u0627\u0644\u062A\u0637\u0628\u064A\u0642",
-        tabIds,
-        activeTabId: typeof candidate.activeTabId === "number" ? candidate.activeTabId : tabIds[0] ?? null,
-        agentControlEnabled: Boolean(candidate.agentControlEnabled),
-        createdAt: typeof candidate.createdAt === "number" ? candidate.createdAt : Date.now()
-      });
-    }
-  } catch {
+  if (sender?.origin && (sender.origin.startsWith("http://") || sender.origin.startsWith("https://"))) {
+    return sender.origin;
   }
+  return safeOrigin(sender?.url || "");
 }
+
 async function persistWorkspaces() {
   try {
-    await chrome.storage.session.set({ [WORKSPACES_KEY]: [...workspaces.values()] });
-  } catch {
-  }
+    await chrome.storage.session.set({
+      [STORAGE_KEY]: Array.from(workspaces.values()),
+    });
+  } catch {}
 }
-async function cleanWorkspace(workspace) {
-  const liveTabIds = [];
-  for (const tabId of workspace.tabIds) {
-    try {
-      await chrome.tabs.get(tabId);
-      liveTabIds.push(tabId);
-    } catch {
-      attachedDebuggerTabs.delete(tabId);
-    }
-  }
-  workspace.tabIds = liveTabIds;
-  if (!workspace.activeTabId || !liveTabIds.includes(workspace.activeTabId)) workspace.activeTabId = liveTabIds[0] ?? null;
-  if (liveTabIds.length === 0) workspaces.delete(workspace.id);
-  await persistWorkspaces();
-  return workspace;
-}
-async function findWorkspace(origin, value) {
-  await restoreWorkspaces();
-  const requestedId = isRecord(value) && typeof value.workspaceId === "string" ? value.workspaceId : void 0;
-  const candidates = [...workspaces.values()].filter((workspace2) => workspace2.origin === origin);
-  const workspace = requestedId ? candidates.find((candidate) => candidate.id === requestedId) : candidates[0];
-  return workspace ? cleanWorkspace(workspace) : null;
-}
-async function requireWorkspace(origin, data) {
-  const workspace = await findWorkspace(origin, data);
-  if (!workspace || workspace.tabIds.length === 0) throw new Error("No active managed workspace exists for this web application.");
-  return workspace;
-}
-function assertOwnedTab(workspace, candidate) {
-  const tabId = candidate ?? workspace.activeTabId;
-  if (!Number.isInteger(tabId) || !workspace.tabIds.includes(tabId)) throw new Error("This tab is not part of the current managed workspace.");
-  return tabId;
-}
-function matchingWorkspace(tabId) {
-  return [...workspaces.values()].find((workspace) => workspace.tabIds.includes(tabId)) ?? null;
-}
-function response(requestId, ok, result, error) {
-  return { channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "response", requestId, ok, ...ok ? { result } : { error } };
-}
-async function broadcast(workspace, event) {
-  const message = { channel: BRIDGE_CHANNEL, version: BRIDGE_VERSION, kind: "event", event };
-  await Promise.all([...subscribers.entries()].filter(([, subscriber]) => subscriber.origin === workspace.origin).map(async ([key, subscriber]) => {
-    try {
-      await chrome.tabs.sendMessage(subscriber.tabId, message, { frameId: subscriber.frameId });
-    } catch {
-      subscribers.delete(key);
-    }
-  }));
-}
-async function groupTab(tabId, title) {
+
+async function restoreWorkspaces() {
   try {
-    const groupId = await chrome.tabs.group({ tabIds: [tabId] });
-    await chrome.tabGroups.update(groupId, { title, color: "blue", collapsed: false });
-    return groupId;
-  } catch {
-    return null;
+    const data = await chrome.storage.session.get(STORAGE_KEY);
+    const list = data?.[STORAGE_KEY];
+    if (Array.isArray(list)) {
+      for (const ws of list) {
+        if (ws && ws.id) workspaces.set(ws.id, ws);
+      }
+    }
+  } catch {}
+}
+
+void restoreWorkspaces();
+
+function broadcastEvent(event) {
+  for (const tabId of subscribers) {
+    chrome.tabs.sendMessage(tabId, { scope: "real-browser-event", event }).catch(() => {
+      subscribers.delete(tabId);
+    });
   }
 }
+
 async function ensureDebugger(tabId) {
   if (attachedDebuggerTabs.has(tabId)) return;
   await chrome.debugger.attach({ tabId }, "1.3");
-  try {
-    await chrome.debugger.sendCommand({ tabId }, "Page.enable");
-    attachedDebuggerTabs.add(tabId);
-  } catch (error) {
-    try {
-      await chrome.debugger.detach({ tabId });
-    } catch {
-    }
-    throw error;
-  }
+  attachedDebuggerTabs.add(tabId);
 }
-async function createWorkspace(origin, data) {
-  const existing = await findWorkspace(origin);
-  if (existing && existing.tabIds.length > 0) {
-    const active = assertOwnedTab(existing, existing.activeTabId);
-    return { workspace: existing, tab: toBrowserTab(await chrome.tabs.get(active)) };
-  }
-  const url = typeof data.url === "string" ? normalizeTabUrl(data.url) : "https://www.google.com/";
-  const tab = await chrome.tabs.create({ url, active: true });
-  const tabId = tab.id;
-  if (!Number.isInteger(tabId)) throw new Error("Chrome did not create a tab identifier.");
-  const workspace = {
-    id: workspaceId(),
-    origin,
-    groupId: await groupTab(tabId, label(data.label)),
-    label: label(data.label),
-    tabIds: [tabId],
-    activeTabId: tabId,
-    agentControlEnabled: data.agentControl === true,
-    createdAt: Date.now()
-  };
-  workspaces.set(workspace.id, workspace);
-  await persistWorkspaces();
-  const browserTab = toBrowserTab(tab);
-  await broadcast(workspace, { type: "workspace-created", workspace, tab: browserTab });
-  return { workspace, tab: browserTab };
+
+chrome.debugger.onDetach.addListener((source) => {
+  if (source?.tabId) attachedDebuggerTabs.delete(source.tabId);
+});
+
+function cdpSend(tabId, method, params = {}) {
+  return chrome.debugger.sendCommand({ tabId }, method, params);
 }
-async function openTab(workspace, data) {
-  if (typeof data.url !== "string") throw new TypeError("A URL is required.");
-  const tab = await chrome.tabs.create({ url: normalizeTabUrl(data.url), active: data.active !== false, ...workspace.groupId !== null ? { openerTabId: workspace.activeTabId ?? void 0 } : {} });
-  if (!Number.isInteger(tab.id)) throw new Error("Chrome did not create a tab identifier.");
-  if (workspace.groupId !== null) await chrome.tabs.group({ tabIds: [tab.id], groupId: workspace.groupId });
-  workspace.tabIds.push(tab.id);
-  if (data.active !== false) workspace.activeTabId = tab.id;
-  await persistWorkspaces();
-  const browserTab = toBrowserTab(tab);
-  await broadcast(workspace, { type: "workspace-tab-opened", workspaceId: workspace.id, tab: browserTab });
-  await broadcast(workspace, { type: "workspace-updated", workspace });
-  return { tab: browserTab, workspace };
-}
-async function duplicateTab(workspace, tabId, active) {
-  assertOwnedTab(workspace, tabId);
-  const duplicated = await chrome.tabs.duplicate(tabId);
-  if (!Number.isInteger(duplicated.id)) throw new Error("Chrome did not duplicate the managed tab.");
-  if (workspace.groupId !== null) await chrome.tabs.group({ tabIds: [duplicated.id], groupId: workspace.groupId });
-  if (!active) await chrome.tabs.update(duplicated.id, { active: false });
-  workspace.tabIds.push(duplicated.id);
-  if (active) workspace.activeTabId = duplicated.id;
-  await persistWorkspaces();
-  const tab = toBrowserTab(await chrome.tabs.get(duplicated.id));
-  await broadcast(workspace, { type: "workspace-tab-opened", workspaceId: workspace.id, tab });
-  await broadcast(workspace, { type: "workspace-updated", workspace });
-  return { tab, workspace };
-}
-async function captureScreenshot(workspace, data) {
-  const tabId = assertOwnedTab(workspace, data.tabId);
+
+async function getViewportMetrics(tabId) {
   await ensureDebugger(tabId);
-  const format = data.format === "png" ? "png" : "jpeg";
-  const suppliedQuality = data.quality;
-  const quality = typeof suppliedQuality === "number" && Number.isFinite(suppliedQuality) ? Math.max(30, Math.min(100, Math.round(suppliedQuality))) : 78;
-  const result = await chrome.debugger.sendCommand(
-    { tabId },
-    "Page.captureScreenshot",
-    { format, ...format === "jpeg" ? { quality } : {}, fromSurface: true, optimizeForSpeed: format === "jpeg" }
-  );
-  if (!result || typeof result.data !== "string") throw new Error("Chrome did not return a screenshot.");
-  return { tabId, dataUrl: `data:image/${format};base64,${result.data}`, capturedAt: Date.now() };
-}
-function modifierMask(value) {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 15 ? value : 0;
-}
-function virtualKeyCode(key, code) {
-  const named = {
-    Backspace: 8,
-    Tab: 9,
-    Enter: 13,
-    Shift: 16,
-    Control: 17,
-    Alt: 18,
-    Pause: 19,
-    CapsLock: 20,
-    Escape: 27,
-    " ": 32,
-    PageUp: 33,
-    PageDown: 34,
-    End: 35,
-    Home: 36,
-    ArrowLeft: 37,
-    ArrowUp: 38,
-    ArrowRight: 39,
-    ArrowDown: 40,
-    Insert: 45,
-    Delete: 46,
-    Meta: 91
+  const metrics = await cdpSend(tabId, "Page.getLayoutMetrics");
+  const layout = metrics?.cssLayoutViewport || metrics?.layoutViewport || {};
+  return {
+    width: Math.max(1, Math.round(layout.clientWidth || 1440)),
+    height: Math.max(1, Math.round(layout.clientHeight || 900)),
   };
-  if (named[key] !== void 0) return named[key];
-  const keyMatch = code?.match(/^Key([A-Z])$/);
-  if (keyMatch) return keyMatch[1].charCodeAt(0);
-  const digitMatch = code?.match(/^Digit([0-9])$/);
-  if (digitMatch) return digitMatch[1].charCodeAt(0);
-  if (/^[a-z]$/i.test(key)) return key.toUpperCase().charCodeAt(0);
-  if (/^[0-9]$/.test(key)) return key.charCodeAt(0);
-  return void 0;
 }
-async function dispatchInput(workspace, data) {
-  if (!isRecord(data.input)) throw new TypeError("A valid input payload is required.");
-  const tabId = assertOwnedTab(workspace, data.tabId);
+
+function resolveCoord(val, dim, space) {
+  if (typeof val !== "number") return undefined;
+  if (space === "normalized_1000") {
+    const clamped = Math.max(0, Math.min(999, val));
+    return Math.round((clamped / 1000) * dim);
+  }
+  return Math.round(val);
+}
+
+function modifierBitmask(modifiers = []) {
+  let mask = 0;
+  for (const m of modifiers) {
+    const k = String(m).toLowerCase();
+    if (k === "alt") mask |= 1;
+    else if (k === "ctrl" || k === "control") mask |= 2;
+    else if (k === "meta" || k === "super" || k === "cmd" || k === "command") mask |= 4;
+    else if (k === "shift") mask |= 8;
+  }
+  return mask;
+}
+
+const KEY_MAP = {
+  enter: { key: "Enter", code: "Enter", keyCode: 13 },
+  return: { key: "Enter", code: "Enter", keyCode: 13 },
+  tab: { key: "Tab", code: "Tab", keyCode: 9 },
+  backspace: { key: "Backspace", code: "Backspace", keyCode: 8 },
+  delete: { key: "Delete", code: "Delete", keyCode: 46 },
+  insert: { key: "Insert", code: "Insert", keyCode: 45 },
+  escape: { key: "Escape", code: "Escape", keyCode: 27 },
+  esc: { key: "Escape", code: "Escape", keyCode: 27 },
+  space: { key: " ", code: "Space", keyCode: 32 },
+  " ": { key: " ", code: "Space", keyCode: 32 },
+  arrowup: { key: "ArrowUp", code: "ArrowUp", keyCode: 38 },
+  up: { key: "ArrowUp", code: "ArrowUp", keyCode: 38 },
+  arrowdown: { key: "ArrowDown", code: "ArrowDown", keyCode: 40 },
+  down: { key: "ArrowDown", code: "ArrowDown", keyCode: 40 },
+  arrowleft: { key: "ArrowLeft", code: "ArrowLeft", keyCode: 37 },
+  left: { key: "ArrowLeft", code: "ArrowLeft", keyCode: 37 },
+  arrowright: { key: "ArrowRight", code: "ArrowRight", keyCode: 39 },
+  right: { key: "ArrowRight", code: "ArrowRight", keyCode: 39 },
+  home: { key: "Home", code: "Home", keyCode: 36 },
+  end: { key: "End", code: "End", keyCode: 35 },
+  pageup: { key: "PageUp", code: "PageUp", keyCode: 33 },
+  pagedown: { key: "PageDown", code: "PageDown", keyCode: 34 },
+  capslock: { key: "CapsLock", code: "CapsLock", keyCode: 20 },
+  numlock: { key: "NumLock", code: "NumLock", keyCode: 144 },
+  scrolllock: { key: "ScrollLock", code: "ScrollLock", keyCode: 145 },
+  printscreen: { key: "PrintScreen", code: "PrintScreen", keyCode: 44 },
+  pause: { key: "Pause", code: "Pause", keyCode: 19 },
+  contextmenu: { key: "ContextMenu", code: "ContextMenu", keyCode: 93 },
+  control: { key: "Control", code: "ControlLeft", keyCode: 17 },
+  ctrl: { key: "Control", code: "ControlLeft", keyCode: 17 },
+  shift: { key: "Shift", code: "ShiftLeft", keyCode: 16 },
+  alt: { key: "Alt", code: "AltLeft", keyCode: 18 },
+  meta: { key: "Meta", code: "MetaLeft", keyCode: 91 },
+  super: { key: "Meta", code: "MetaLeft", keyCode: 91 },
+  browserback: { key: "BrowserBack", code: "BrowserBack", keyCode: 166 },
+  browserforward: { key: "BrowserForward", code: "BrowserForward", keyCode: 167 },
+  browserrefresh: { key: "BrowserRefresh", code: "BrowserRefresh", keyCode: 168 },
+  browserhome: { key: "BrowserHome", code: "BrowserHome", keyCode: 172 },
+  mediaplaypause: { key: "MediaPlayPause", code: "MediaPlayPause", keyCode: 179 },
+  audiovolumemute: { key: "AudioVolumeMute", code: "AudioVolumeMute", keyCode: 173 },
+  audiovolumeup: { key: "AudioVolumeUp", code: "AudioVolumeUp", keyCode: 175 },
+  audiovolumedown: { key: "AudioVolumeDown", code: "AudioVolumeDown", keyCode: 174 },
+  "-": { key: "-", code: "Minus", keyCode: 189 },
+  "=": { key: "=", code: "Equal", keyCode: 187 },
+  "[": { key: "[", code: "BracketLeft", keyCode: 219 },
+  "]": { key: "]", code: "BracketRight", keyCode: 221 },
+  "\\": { key: "\\", code: "Backslash", keyCode: 220 },
+  ";": { key: ";", code: "Semicolon", keyCode: 186 },
+  "'": { key: "'", code: "Quote", keyCode: 222 },
+  ",": { key: ",", code: "Comma", keyCode: 188 },
+  ".": { key: ".", code: "Period", keyCode: 190 },
+  "/": { key: "/", code: "Slash", keyCode: 191 },
+  "`": { key: "`", code: "Backquote", keyCode: 192 },
+};
+
+for (let f = 1; f <= 12; f++) {
+  KEY_MAP[`f${f}`] = { key: `F${f}`, code: `F${f}`, keyCode: 111 + f };
+}
+for (let n = 0; n <= 9; n++) {
+  KEY_MAP[`numpad${n}`] = { key: String(n), code: `Numpad${n}`, keyCode: 96 + n };
+}
+
+function resolveKeyDef(rawKey) {
+  const lower = String(rawKey || "").toLowerCase();
+  if (KEY_MAP[lower]) return KEY_MAP[lower];
+  if (rawKey.length === 1) {
+    const upper = rawKey.toUpperCase();
+    const code = /[A-Z]/.test(upper) ? `Key${upper}` : /[0-9]/.test(upper) ? `Digit${upper}` : rawKey;
+    return { key: rawKey, code, keyCode: upper.charCodeAt(0) };
+  }
+  return { key: rawKey, code: rawKey, keyCode: 0 };
+}
+
+async function dispatchKey(tabId, type, rawKey, modifiersMask = 0) {
+  const def = resolveKeyDef(rawKey);
+  await cdpSend(tabId, "Input.dispatchKeyEvent", {
+    type,
+    key: def.key,
+    code: def.code,
+    windowsVirtualKeyCode: def.keyCode,
+    nativeVirtualKeyCode: def.keyCode,
+    modifiers: modifiersMask,
+  });
+}
+
+async function captureTabScreenshot(tabId, options = {}) {
   await ensureDebugger(tabId);
-  const input = data.input;
-  if (input.kind === "pointer") {
-    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", { type: input.type, x: numberValue(input, "x"), y: numberValue(input, "y"), button: input.button ?? "none", clickCount: input.clickCount ?? 0 });
-  } else if (input.kind === "wheel") {
-    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", { type: "mouseWheel", x: numberValue(input, "x"), y: numberValue(input, "y"), deltaX: numberValue(input, "deltaX", 0), deltaY: numberValue(input, "deltaY", 0) });
-  } else if (input.kind === "key") {
-    if (!["keyDown", "keyUp", "char"].includes(input.type) || typeof input.key !== "string" || input.key.length > 128) throw new TypeError("Invalid key input.");
-    const keyCode = virtualKeyCode(input.key, input.code);
-    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", {
-      type: input.type,
-      key: input.key,
-      ...input.code ? { code: input.code } : {},
-      modifiers: modifierMask(input.modifiers),
-      ...typeof input.location === "number" ? { location: input.location } : {},
-      ...input.type === "char" ? { text: input.key, unmodifiedText: input.key } : {},
-      ...keyCode !== void 0 ? { windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode } : {}
-    });
-  } else if (input.kind === "text") {
-    if (typeof input.text !== "string" || input.text.length > 1e4) throw new TypeError("Text input must be at most 10000 characters.");
-    await chrome.debugger.sendCommand({ tabId }, "Input.insertText", { text: input.text });
-  } else throw new TypeError("Unsupported input event.");
-  return { ok: true };
+  const tab = await chrome.tabs.get(tabId);
+  const metrics = await getViewportMetrics(tabId);
+  const format = options.format === "jpeg" ? "jpeg" : "png";
+  const params = {
+    format,
+    ...(format === "jpeg" && options.quality ? { quality: options.quality } : {}),
+    ...(options.clip ? { clip: options.clip } : {}),
+  };
+  const res = await cdpSend(tabId, "Page.captureScreenshot", params);
+  const mimeType = format === "jpeg" ? "image/jpeg" : "image/png";
+  return {
+    tabId,
+    url: tab.url || "",
+    title: tab.title || "",
+    format,
+    mimeType,
+    base64: res.data,
+    dataUrl: `data:${mimeType};base64,${res.data}`,
+    width: options.clip ? Math.round(options.clip.width) : metrics.width,
+    height: options.clip ? Math.round(options.clip.height) : metrics.height,
+    devicePixelRatio: 1,
+    capturedAt: Date.now(),
+  };
 }
-async function closeTab(workspace, tabId) {
-  assertOwnedTab(workspace, tabId);
-  await chrome.tabs.remove(tabId);
-  attachedDebuggerTabs.delete(tabId);
-  workspace.tabIds = workspace.tabIds.filter((id) => id !== tabId);
-  if (workspace.activeTabId === tabId) workspace.activeTabId = workspace.tabIds[0] ?? null;
-  if (workspace.tabIds.length === 0) {
-    workspaces.delete(workspace.id);
-    await persistWorkspaces();
-    await broadcast(workspace, { type: "workspace-closed", workspaceId: workspace.id, reason: "The final managed tab was closed." });
-    return { ok: true, workspace: null };
-  }
-  await persistWorkspaces();
-  await broadcast(workspace, { type: "workspace-tab-removed", workspaceId: workspace.id, tabId });
-  await broadcast(workspace, { type: "workspace-updated", workspace });
-  return { ok: true, workspace };
-}
-async function closeWorkspace(workspace) {
-  const ids = [...workspace.tabIds];
-  workspaces.delete(workspace.id);
-  await persistWorkspaces();
-  for (const tabId of ids) {
-    attachedDebuggerTabs.delete(tabId);
-    try {
-      await chrome.debugger.detach({ tabId });
-    } catch {
-    }
-  }
-  if (ids.length) await chrome.tabs.remove(ids).catch(() => void 0);
-  await broadcast(workspace, { type: "workspace-closed", workspaceId: workspace.id, reason: "The web application closed its managed workspace." });
-  return { ok: true };
-}
-async function runAgent(workspace, operation) {
-  assertAgentControlEnabled(workspace);
-  if (!isRecord(operation) || typeof operation.type !== "string") throw new TypeError("A valid agent operation is required.");
-  if (operation.type === "open") return openTab(workspace, { url: normalizeTabUrl(operation.url), active: operation.active ?? true });
-  if (operation.type === "navigate") {
-    const tabId = assertOwnedTab(workspace, operation.tabId);
-    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { url: normalizeTabUrl(operation.url) })) };
-  }
-  if (operation.type === "activate") {
-    const tabId = assertOwnedTab(workspace, operation.tabId);
-    workspace.activeTabId = tabId;
-    await persistWorkspaces();
-    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { active: true })) };
-  }
-  if (operation.type === "reload") {
-    const tabId = assertOwnedTab(workspace, operation.tabId);
-    await chrome.tabs.reload(tabId);
-    return { ok: true };
-  }
-  if (operation.type === "back") {
-    const tabId = assertOwnedTab(workspace, operation.tabId);
-    await chrome.tabs.goBack(tabId);
-    return { ok: true };
-  }
-  if (operation.type === "forward") {
-    const tabId = assertOwnedTab(workspace, operation.tabId);
-    await chrome.tabs.goForward(tabId);
-    return { ok: true };
-  }
-  if (operation.type === "duplicate") return duplicateTab(workspace, assertOwnedTab(workspace, operation.tabId), operation.active ?? true);
-  if (operation.type === "pin") {
-    const tabId = assertOwnedTab(workspace, operation.tabId);
-    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { pinned: operation.pinned })) };
-  }
-  if (operation.type === "mute") {
-    const tabId = assertOwnedTab(workspace, operation.tabId);
-    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { muted: operation.muted })) };
-  }
-  if (operation.type === "close") return closeTab(workspace, assertOwnedTab(workspace, operation.tabId));
-  if (operation.type === "screenshot") return captureScreenshot(workspace, { tabId: operation.tabId });
-  if (operation.type === "input") return dispatchInput(workspace, { tabId: operation.tabId, input: operation.input });
-  throw new Error("Unsupported agent operation.");
-}
-async function handleWorkspaceAction(origin, action, data) {
-  if (action === "workspaceGet") return { workspace: await findWorkspace(origin, data) };
-  const payload = workspaceData(data);
-  if (action === "workspaceCreate") return createWorkspace(origin, payload);
-  const workspace = await requireWorkspace(origin, payload);
-  if (action === "workspaceList") {
-    const tabs = [];
-    for (const tabId of workspace.tabIds) {
-      try {
-        tabs.push(toBrowserTab(await chrome.tabs.get(tabId)));
-      } catch {
+
+async function extractInteractiveElements(tabId) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      const vw = Math.max(1, window.innerWidth);
+      const vh = Math.max(1, window.innerHeight);
+      const nodes = document.querySelectorAll(
+        'a[href], button, input, select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="menuitem"], [tabindex]:not([tabindex="-1"])'
+      );
+      const items = [];
+      let idx = 0;
+      for (const el of nodes) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        if (rect.bottom < 0 || rect.top > vh || rect.right < 0 || rect.left > vw) continue;
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const selector = el.id
+          ? `#${CSS.escape(el.id)}`
+          : el.getAttribute("name")
+            ? `${el.tagName.toLowerCase()}[name="${CSS.escape(el.getAttribute("name"))}"]`
+            : el.tagName.toLowerCase();
+        items.push({
+          index: idx++,
+          tag: el.tagName.toLowerCase(),
+          role: el.getAttribute("role") || el.tagName.toLowerCase(),
+          type: el.getAttribute("type") || undefined,
+          id: el.id || undefined,
+          name: el.getAttribute("name") || undefined,
+          ariaLabel: el.getAttribute("aria-label") || undefined,
+          placeholder: el.getAttribute("placeholder") || undefined,
+          text: (el.innerText || el.value || "").trim().slice(0, 120),
+          href: el.getAttribute("href") || undefined,
+          selector,
+          rect: {
+            x: Math.round(rect.left),
+            y: Math.round(rect.top),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          },
+          normalizedCenter: {
+            x: Math.max(0, Math.min(999, Math.round((cx / vw) * 1000))),
+            y: Math.max(0, Math.min(999, Math.round((cy / vh) * 1000))),
+          },
+          disabled: Boolean(el.disabled),
+          checked: typeof el.checked === "boolean" ? el.checked : undefined,
+        });
+        if (items.length >= 250) break;
       }
-    }
-    return { workspace, tabs };
-  }
-  if (action === "workspaceOpen") return openTab(workspace, payload);
-  if (action === "workspaceNavigate") {
-    const tabId = assertOwnedTab(workspace, payload.tabId);
-    if (typeof payload.url !== "string") throw new TypeError("A URL is required.");
-    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { url: normalizeTabUrl(payload.url) })) };
-  }
-  if (action === "workspaceActivate") {
-    const tabId = assertOwnedTab(workspace, payload.tabId);
-    workspace.activeTabId = tabId;
-    await persistWorkspaces();
-    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { active: true })) };
-  }
-  if (action === "workspaceReload") {
-    await chrome.tabs.reload(assertOwnedTab(workspace, payload.tabId));
-    return { ok: true };
-  }
-  if (action === "workspaceBack") {
-    await chrome.tabs.goBack(assertOwnedTab(workspace, payload.tabId));
-    return { ok: true };
-  }
-  if (action === "workspaceForward") {
-    await chrome.tabs.goForward(assertOwnedTab(workspace, payload.tabId));
-    return { ok: true };
-  }
-  if (action === "workspaceRename") {
-    workspace.label = label(payload.label);
-    if (workspace.groupId !== null) await chrome.tabGroups.update(workspace.groupId, { title: workspace.label });
-    await persistWorkspaces();
-    await broadcast(workspace, { type: "workspace-updated", workspace });
-    return { workspace };
-  }
-  if (action === "workspacePinTab") {
-    const tabId = assertOwnedTab(workspace, payload.tabId);
-    if (typeof payload.pinned !== "boolean") throw new TypeError("pinned must be a boolean.");
-    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { pinned: payload.pinned })) };
-  }
-  if (action === "workspaceMuteTab") {
-    const tabId = assertOwnedTab(workspace, payload.tabId);
-    if (typeof payload.muted !== "boolean") throw new TypeError("muted must be a boolean.");
-    return { tab: toBrowserTab(await chrome.tabs.update(tabId, { muted: payload.muted })) };
-  }
-  if (action === "workspaceDuplicateTab") return duplicateTab(workspace, assertOwnedTab(workspace, payload.tabId), payload.active !== false);
-  if (action === "workspaceCloseTab") return closeTab(workspace, assertOwnedTab(workspace, payload.tabId));
-  if (action === "workspaceClose") return closeWorkspace(workspace);
-  if (action === "workspaceSetAgentControl") {
-    if (typeof payload.enabled !== "boolean") throw new TypeError("enabled must be a boolean.");
-    workspace.agentControlEnabled = payload.enabled;
-    await persistWorkspaces();
-    await broadcast(workspace, { type: "workspace-updated", workspace });
-    return { workspace };
-  }
-  if (action === "workspaceScreenshot") return captureScreenshot(workspace, payload);
-  if (action === "workspaceInput") return dispatchInput(workspace, payload);
-  if (action === "agentExecute") return runAgent(workspace, payload.operation);
-  throw new Error("Unsupported managed workspace action.");
+      return items;
+    },
+  });
+  return results?.[0]?.result || [];
 }
+
+async function executeUnifiedAction(tabId, action) {
+  const started = Date.now();
+  await ensureDebugger(tabId);
+  const metrics = await getViewportMetrics(tabId);
+  const space = action.coordinateSpace || "pixels";
+  const modMask = modifierBitmask(action.modifiers);
+
+  const getXY = (ax, ay) => {
+    const prev = cursorByTab.get(tabId) || { x: Math.round(metrics.width / 2), y: Math.round(metrics.height / 2) };
+    const x = ax !== undefined ? resolveCoord(ax, metrics.width, space) : prev.x;
+    const y = ay !== undefined ? resolveCoord(ay, metrics.height, space) : prev.y;
+    cursorByTab.set(tabId, { x, y });
+    return { x, y };
+  };
+
+  let screenshot;
+  let data;
+
+  switch (action.type) {
+    case "move": {
+      const { x, y } = getXY(action.x, action.y);
+      await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, modifiers: modMask });
+      break;
+    }
+    case "mouse_down":
+    case "mouse_up": {
+      const { x, y } = getXY(action.x, action.y);
+      await cdpSend(tabId, "Input.dispatchMouseEvent", {
+        type: action.type === "mouse_down" ? "mousePressed" : "mouseReleased",
+        x,
+        y,
+        button: "left",
+        clickCount: 1,
+        modifiers: modMask,
+      });
+      break;
+    }
+    case "click":
+    case "double_click":
+    case "triple_click":
+    case "right_click":
+    case "middle_click": {
+      const { x, y } = getXY(action.x, action.y);
+      const button =
+        action.type === "right_click" ? "right" : action.type === "middle_click" ? "middle" : "left";
+      const clickCount =
+        action.type === "double_click" ? 2 : action.type === "triple_click" ? 3 : 1;
+      await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y, modifiers: modMask });
+      for (let c = 1; c <= clickCount; c++) {
+        await cdpSend(tabId, "Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          x,
+          y,
+          button,
+          clickCount: c,
+          modifiers: modMask,
+        });
+        await cdpSend(tabId, "Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          x,
+          y,
+          button,
+          clickCount: c,
+          modifiers: modMask,
+        });
+      }
+      break;
+    }
+    case "long_press": {
+      const { x, y } = getXY(action.x, action.y);
+      await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+      await new Promise((r) => setTimeout(r, Math.max(200, (action.seconds || 2) * 1000)));
+      await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+      break;
+    }
+    case "drag_and_drop": {
+      const path = Array.isArray(action.path) && action.path.length >= 2
+        ? action.path.map((p) => ({
+            x: resolveCoord(p.x, metrics.width, space),
+            y: resolveCoord(p.y, metrics.height, space),
+          }))
+        : [
+            { x: resolveCoord(action.startX, metrics.width, space), y: resolveCoord(action.startY, metrics.height, space) },
+            { x: resolveCoord(action.endX, metrics.width, space), y: resolveCoord(action.endY, metrics.height, space) },
+          ];
+      const first = path[0];
+      const last = path[path.length - 1];
+      await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: first.x, y: first.y, modifiers: modMask });
+      await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: first.x, y: first.y, button: "left", clickCount: 1, modifiers: modMask });
+      for (let i = 1; i < path.length; i++) {
+        await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x: path[i].x, y: path[i].y, button: "left", modifiers: modMask });
+      }
+      await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x: last.x, y: last.y, button: "left", clickCount: 1, modifiers: modMask });
+      cursorByTab.set(tabId, last);
+      break;
+    }
+    case "type": {
+      if (action.x !== undefined && action.y !== undefined) {
+        const { x, y } = getXY(action.x, action.y);
+        await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+        await cdpSend(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+      }
+      if (action.clearFirst) {
+        await dispatchKey(tabId, "keyDown", "a", 2);
+        await dispatchKey(tabId, "keyUp", "a", 2);
+        await dispatchKey(tabId, "keyDown", "Backspace", 0);
+        await dispatchKey(tabId, "keyUp", "Backspace", 0);
+      }
+      await cdpSend(tabId, "Input.insertText", { text: String(action.text || "") });
+      if (action.pressEnter) {
+        await dispatchKey(tabId, "keyDown", "Enter", 0);
+        await dispatchKey(tabId, "keyUp", "Enter", 0);
+      }
+      break;
+    }
+    case "press_key": {
+      const repeat = Math.max(1, Math.min(100, action.repeat || 1));
+      for (let i = 0; i < repeat; i++) {
+        await dispatchKey(tabId, "keyDown", action.key, modMask);
+        await dispatchKey(tabId, "keyUp", action.key, modMask);
+      }
+      break;
+    }
+    case "key_down":
+      await dispatchKey(tabId, "keyDown", action.key, modMask);
+      break;
+    case "key_up":
+      await dispatchKey(tabId, "keyUp", action.key, modMask);
+      break;
+    case "hold_key": {
+      await dispatchKey(tabId, "keyDown", action.key, modMask);
+      await new Promise((r) => setTimeout(r, Math.max(100, (action.seconds || 1) * 1000)));
+      await dispatchKey(tabId, "keyUp", action.key, modMask);
+      break;
+    }
+    case "hotkey": {
+      const keys = Array.isArray(action.keys) ? action.keys : [];
+      const mods = keys.slice(0, -1);
+      const mainKey = keys[keys.length - 1];
+      const mask = modifierBitmask(mods);
+      for (const m of mods) await dispatchKey(tabId, "keyDown", m, mask);
+      if (mainKey) {
+        await dispatchKey(tabId, "keyDown", mainKey, mask);
+        await dispatchKey(tabId, "keyUp", mainKey, mask);
+      }
+      for (const m of [...mods].reverse()) await dispatchKey(tabId, "keyUp", m, 0);
+      break;
+    }
+    case "scroll": {
+      const { x, y } = getXY(action.x, action.y);
+      let deltaX = action.deltaX || 0;
+      let deltaY = action.deltaY || 0;
+      const mag = action.magnitudeInPixels || 300;
+      if (!deltaX && !deltaY) {
+        if (action.direction === "up") deltaY = -mag;
+        else if (action.direction === "down") deltaY = mag;
+        else if (action.direction === "left") deltaX = -mag;
+        else if (action.direction === "right") deltaX = mag;
+      }
+      await cdpSend(tabId, "Input.dispatchMouseEvent", {
+        type: "mouseWheel",
+        x,
+        y,
+        deltaX,
+        deltaY,
+        modifiers: modMask,
+      });
+      break;
+    }
+    case "scroll_to": {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        args: [action.target, action.selector || ""],
+        func: (target, selector) => {
+          if (target === "top") window.scrollTo({ top: 0, behavior: "smooth" });
+          else if (target === "bottom") window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+          else if (target === "selector" && selector) {
+            const el = document.querySelector(selector);
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+        },
+      });
+      break;
+    }
+    case "click_selector": {
+      const res = await chrome.scripting.executeScript({
+        target: { tabId },
+        args: [action.selector],
+        func: (selector) => {
+          const el = document.querySelector(selector);
+          if (!el) return { found: false };
+          el.scrollIntoView({ block: "center" });
+          el.click();
+          return { found: true };
+        },
+      });
+      if (!res?.[0]?.result?.found) throw new Error(`Element not found: ${action.selector}`);
+      break;
+    }
+    case "type_selector": {
+      const res = await chrome.scripting.executeScript({
+        target: { tabId },
+        args: [action.selector, action.text, Boolean(action.clearFirst)],
+        func: (selector, text, clearFirst) => {
+          const el = document.querySelector(selector);
+          if (!el) return { found: false };
+          el.focus();
+          if (clearFirst && "value" in el) el.value = "";
+          if ("value" in el) {
+            el.value = clearFirst ? text : (el.value || "") + text;
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          return { found: true };
+        },
+      });
+      if (!res?.[0]?.result?.found) throw new Error(`Element not found: ${action.selector}`);
+      if (action.pressEnter) {
+        await dispatchKey(tabId, "keyDown", "Enter", 0);
+        await dispatchKey(tabId, "keyUp", "Enter", 0);
+      }
+      break;
+    }
+    case "select_option": {
+      const res = await chrome.scripting.executeScript({
+        target: { tabId },
+        args: [action.selector, action.value],
+        func: (selector, value) => {
+          const el = document.querySelector(selector);
+          if (!el) return { found: false };
+          el.value = value;
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          return { found: true };
+        },
+      });
+      if (!res?.[0]?.result?.found) throw new Error(`Select not found: ${action.selector}`);
+      break;
+    }
+    case "find_in_page": {
+      const res = await chrome.scripting.executeScript({
+        target: { tabId },
+        args: [action.query],
+        func: (q) => ({ matched: Boolean(window.find(q)) }),
+      });
+      data = res?.[0]?.result;
+      break;
+    }
+    case "window_mode": {
+      const tab = await chrome.tabs.get(tabId);
+      if (action.mode) {
+        await chrome.windows.update(tab.windowId, { state: action.mode });
+      }
+      if (typeof action.zoomFactor === "number") {
+        await chrome.tabs.setZoom(tabId, action.zoomFactor);
+      }
+      break;
+    }
+    case "navigate": {
+      if (!safeOrigin(action.url)) throw new Error(`Blocked invalid URL: ${action.url}`);
+      await chrome.tabs.update(tabId, { url: action.url });
+      break;
+    }
+    case "go_back":
+      await chrome.tabs.goBack(tabId);
+      break;
+    case "go_forward":
+      await chrome.tabs.goForward(tabId);
+      break;
+    case "reload":
+      await chrome.tabs.reload(tabId);
+      break;
+    case "wait":
+      await new Promise((r) => setTimeout(r, Math.max(0, (action.seconds || 1) * 1000)));
+      break;
+    case "take_screenshot":
+      screenshot = await captureTabScreenshot(tabId, { format: "png" });
+      break;
+    case "zoom": {
+      const [x0, y0, x1, y1] = action.region || [0, 0, 100, 100];
+      const rx0 = resolveCoord(x0, metrics.width, space);
+      const ry0 = resolveCoord(y0, metrics.height, space);
+      const rx1 = resolveCoord(x1, metrics.width, space);
+      const ry1 = resolveCoord(y1, metrics.height, space);
+      screenshot = await captureTabScreenshot(tabId, {
+        format: "png",
+        clip: {
+          x: Math.min(rx0, rx1),
+          y: Math.min(ry0, ry1),
+          width: Math.max(10, Math.abs(rx1 - rx0)),
+          height: Math.max(10, Math.abs(ry1 - ry0)),
+          scale: 1,
+        },
+      });
+      break;
+    }
+    case "cursor_position":
+      break;
+  }
+
+  const tab = await chrome.tabs.get(tabId);
+  return {
+    ok: true,
+    actionType: action.type,
+    tabId,
+    url: tab.url || "",
+    title: tab.title || "",
+    cursorPosition: cursorByTab.get(tabId) || { x: 0, y: 0 },
+    ...(screenshot ? { screenshot } : {}),
+    ...(data !== undefined ? { data } : {}),
+    durationMs: Date.now() - started,
+  };
+}
+
+function getWorkspaceForOrigin(origin, workspaceId) {
+  if (workspaceId && workspaces.has(workspaceId)) {
+    const ws = workspaces.get(workspaceId);
+    if (ws.origin === origin) return ws;
+    throw new Error("Workspace origin mismatch");
+  }
+  for (const ws of workspaces.values()) {
+    if (ws.origin === origin) return ws;
+  }
+  throw new Error("Workspace not found for this origin");
+}
+
+async function handleBridgeCommand(command, sender) {
+  const origin = pageOrigin(sender);
+  const payload = command.payload || {};
+
+  switch (command.action) {
+    case "status":
+      return {
+        installed: true,
+        version: EXTENSION_VERSION,
+        bridgeVersion: 4,
+        channel: BRIDGE_CHANNEL,
+        capabilities: [
+          "workspace",
+          "cdp-input",
+          "dom-inspection",
+          "window-modes",
+          "print-pdf",
+          "mcp-tools",
+          "computer-use-gemini",
+          "computer-use-anthropic",
+          "computer-use-openai",
+          "zoom-screenshot",
+        ],
+      };
+
+    case "subscribe":
+      if (sender?.tab?.id) subscribers.add(sender.tab.id);
+      return { subscribed: true };
+
+    case "workspaceCreate": {
+      if (!origin) throw new Error("Cannot create workspace from non-HTTP(S) origin");
+      const url = payload.url && safeOrigin(payload.url) ? payload.url : "about:blank";
+      const tab = await chrome.tabs.create({ url, active: true });
+      const groupId = await chrome.tabs.group({ tabIds: [tab.id] });
+      const label = String(payload.label || "AI Workspace");
+      await chrome.tabGroups.update(groupId, { title: label, color: "blue" });
+      const ws = {
+        id: `ws_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        origin,
+        groupId,
+        label,
+        tabIds: [tab.id],
+        activeTabId: tab.id,
+        agentControlEnabled: Boolean(payload.agentControlEnabled),
+        createdAt: Date.now(),
+      };
+      workspaces.set(ws.id, ws);
+      await persistWorkspaces();
+      broadcastEvent({ type: "workspace.created", workspaceId: ws.id, timestamp: Date.now() });
+      return ws;
+    }
+
+    case "workspaceGet": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      if (payload.includeTabs) {
+        const tabs = await chrome.tabs.query({ groupId: ws.groupId });
+        return {
+          workspace: ws,
+          tabs,
+          activeTab: tabs.find((t) => t.id === ws.activeTabId) || tabs[0] || null,
+        };
+      }
+      return ws;
+    }
+
+    case "workspaceList": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      return chrome.tabs.query({ groupId: ws.groupId });
+    }
+
+    case "workspaceOpen": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      if (!safeOrigin(payload.url)) throw new Error("Invalid HTTP(S) URL");
+      const tab = await chrome.tabs.create({ url: payload.url, active: payload.active !== false });
+      await chrome.tabs.group({ tabIds: [tab.id], groupId: ws.groupId });
+      ws.tabIds.push(tab.id);
+      if (payload.active !== false) ws.activeTabId = tab.id;
+      await persistWorkspaces();
+      return tab;
+    }
+
+    case "workspaceNavigate": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      if (!safeOrigin(payload.url)) throw new Error("Invalid HTTP(S) URL");
+      return chrome.tabs.update(tabId, { url: payload.url });
+    }
+
+    case "workspaceActivate": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      ws.activeTabId = payload.tabId;
+      await persistWorkspaces();
+      return chrome.tabs.update(payload.tabId, { active: true });
+    }
+
+    case "workspaceReload": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      await chrome.tabs.reload(payload.tabId || ws.activeTabId);
+      return { ok: true };
+    }
+
+    case "workspaceBack": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      await chrome.tabs.goBack(payload.tabId || ws.activeTabId);
+      return { ok: true };
+    }
+
+    case "workspaceForward": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      await chrome.tabs.goForward(payload.tabId || ws.activeTabId);
+      return { ok: true };
+    }
+
+    case "workspaceRename": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      ws.label = String(payload.label || ws.label);
+      await chrome.tabGroups.update(ws.groupId, { title: ws.label });
+      await persistWorkspaces();
+      return ws;
+    }
+
+    case "workspacePinTab": {
+      getWorkspaceForOrigin(origin, payload.workspaceId);
+      return chrome.tabs.update(payload.tabId, { pinned: Boolean(payload.pinned) });
+    }
+
+    case "workspaceMuteTab": {
+      getWorkspaceForOrigin(origin, payload.workspaceId);
+      return chrome.tabs.update(payload.tabId, { muted: Boolean(payload.muted) });
+    }
+
+    case "workspaceDuplicateTab": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const dup = await chrome.tabs.duplicate(payload.tabId);
+      ws.tabIds.push(dup.id);
+      await persistWorkspaces();
+      return dup;
+    }
+
+    case "workspaceCloseTab": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      await chrome.tabs.remove(payload.tabId);
+      ws.tabIds = ws.tabIds.filter((id) => id !== payload.tabId);
+      if (ws.activeTabId === payload.tabId) ws.activeTabId = ws.tabIds[0] || null;
+      await persistWorkspaces();
+      return { ok: true };
+    }
+
+    case "workspaceClose": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      if (ws.tabIds.length) await chrome.tabs.remove(ws.tabIds).catch(() => {});
+      workspaces.delete(ws.id);
+      await persistWorkspaces();
+      return { ok: true };
+    }
+
+    case "workspaceSetAgentControl": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      ws.agentControlEnabled = Boolean(payload.enabled);
+      await persistWorkspaces();
+      return ws;
+    }
+
+    case "workspaceScreenshot": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      return captureTabScreenshot(tabId, payload);
+    }
+
+    case "workspaceZoomScreenshot": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      const metrics = await getViewportMetrics(tabId);
+      const space = payload.coordinateSpace || "pixels";
+      const [x0, y0, x1, y1] = payload.region || [0, 0, 100, 100];
+      const rx0 = resolveCoord(x0, metrics.width, space);
+      const ry0 = resolveCoord(y0, metrics.height, space);
+      const rx1 = resolveCoord(x1, metrics.width, space);
+      const ry1 = resolveCoord(y1, metrics.height, space);
+      return captureTabScreenshot(tabId, {
+        format: "png",
+        clip: {
+          x: Math.min(rx0, rx1),
+          y: Math.min(ry0, ry1),
+          width: Math.max(10, Math.abs(rx1 - rx0)),
+          height: Math.max(10, Math.abs(ry1 - ry0)),
+          scale: 1,
+        },
+      });
+    }
+
+    case "workspaceCursorPosition": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      return cursorByTab.get(tabId) || { x: 0, y: 0 };
+    }
+
+    case "workspaceInteractiveElements": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      return extractInteractiveElements(tabId);
+    }
+
+    case "workspacePageText": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      const res = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => ({
+          title: document.title,
+          url: window.location.href,
+          text: (document.body?.innerText || "").slice(0, 50000),
+        }),
+      });
+      return res?.[0]?.result || { title: "", url: "", text: "" };
+    }
+
+    case "workspaceWindowMode": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      const tab = await chrome.tabs.get(tabId);
+      await chrome.windows.update(tab.windowId, { state: payload.mode || "normal" });
+      return { ok: true, mode: payload.mode };
+    }
+
+    case "workspaceSetZoom": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      await chrome.tabs.setZoom(tabId, Number(payload.zoomFactor || 1));
+      return { ok: true, zoomFactor: await chrome.tabs.getZoom(tabId) };
+    }
+
+    case "workspacePrintPdf": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      await ensureDebugger(tabId);
+      const pdf = await cdpSend(tabId, "Page.printToPDF", { printBackground: true });
+      return { base64: pdf.data, mimeType: "application/pdf" };
+    }
+
+    case "workspaceInput": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      const inp = payload.input || {};
+      if (inp.type === "text") {
+        return executeUnifiedAction(tabId, { type: "type", text: inp.text || "" });
+      }
+      if (inp.type === "key") {
+        return executeUnifiedAction(tabId, { type: "press_key", key: inp.key || "" });
+      }
+      if (inp.type === "wheel") {
+        return executeUnifiedAction(tabId, {
+          type: "scroll",
+          x: inp.x,
+          y: inp.y,
+          deltaX: inp.deltaX,
+          deltaY: inp.deltaY,
+        });
+      }
+      return executeUnifiedAction(tabId, {
+        type: inp.action === "dblclick" ? "double_click" : inp.action === "rightclick" ? "right_click" : "click",
+        x: inp.x,
+        y: inp.y,
+      });
+    }
+
+    case "agentExecute": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      if (!ws.agentControlEnabled) {
+        throw new Error(
+          `Agent control is disabled for workspace "${ws.id}". Enable it first via setAgentControl(true).`
+        );
+      }
+      const tabId = payload.tabId || ws.activeTabId;
+      const res = await executeUnifiedAction(tabId, payload.action || {});
+      if (payload.safetyAcknowledged) res.safetyAcknowledgement = true;
+      broadcastEvent({
+        type: "agent.action",
+        workspaceId: ws.id,
+        tabId,
+        payload: { provider: payload.provider, actionType: res.actionType, intent: payload.intent },
+        timestamp: Date.now(),
+      });
+      return res;
+    }
+
+    default:
+      throw new Error(`Unsupported action: ${command.action}`);
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (isRecord(message) && message.scope === "real-browser-popup") {
-    void (async () => {
-      try {
-        if (!Number.isInteger(message.tabId)) throw new Error("Open the extension on an HTTP(S) web application page.");
-        const popupTab = await chrome.tabs.get(message.tabId);
-        const origin = safeOrigin(popupTab.url ?? popupTab.pendingUrl);
-        if (!origin) throw new Error("Managed workspaces are available only for regular HTTP(S) web pages.");
-        const workspace = await findWorkspace(origin);
-        if (message.action === "workspace-status") return { ok: true, workspace };
-        if (message.action === "close-workspace") return workspace ? await closeWorkspace(workspace) : { ok: true };
-        if (message.action === "ensure-site-bridge" && Number.isInteger(message.tabId)) return { ok: true, ...await ensureSiteBridge(chrome, message.tabId) };
-        throw new Error("Unsupported popup action.");
-      } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : "The extension could not complete the request." };
+  if (message?.scope === "real-browser-bridge" && message.command) {
+    handleBridgeCommand(message.command, sender)
+      .then((data) =>
+        sendResponse({
+          channel: message.command.channel || BRIDGE_CHANNEL,
+          id: message.command.id,
+          ok: true,
+          data,
+        })
+      )
+      .catch((err) =>
+        sendResponse({
+          channel: message.command.channel || BRIDGE_CHANNEL,
+          id: message.command.id,
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      );
+    return true;
+  }
+
+  if (message?.scope === "real-browser-popup") {
+    (async () => {
+      if (message.action === "ensure-site-bridge" && message.tabId) {
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: message.tabId },
+            files: ["bridge.js"],
+          });
+          return { ok: true };
+        } catch (err) {
+          return { ok: false, error: String(err) };
+        }
       }
+      if (message.action === "workspace-status") {
+        const origin = safeOrigin(message.url || "");
+        for (const ws of workspaces.values()) {
+          if (ws.origin === origin) return { ok: true, workspace: ws };
+        }
+        return { ok: true, workspace: null };
+      }
+      if (message.action === "toggle-agent-control" && message.workspaceId) {
+        const ws = workspaces.get(message.workspaceId);
+        if (ws) {
+          ws.agentControlEnabled = Boolean(message.enabled);
+          await persistWorkspaces();
+          return { ok: true, workspace: ws };
+        }
+        return { ok: false };
+      }
+      if (message.action === "close-workspace" && message.workspaceId) {
+        const ws = workspaces.get(message.workspaceId);
+        if (ws) {
+          if (ws.tabIds.length) await chrome.tabs.remove(ws.tabIds).catch(() => {});
+          workspaces.delete(ws.id);
+          await persistWorkspaces();
+        }
+        return { ok: true };
+      }
+      return { ok: false };
     })().then(sendResponse);
     return true;
   }
-  if (!isBridgeCommand(message)) return;
-  void (async () => {
-    try {
-      const origin = pageOrigin(sender);
-      if (message.action === "status") return response(message.requestId, true, { ...createExtensionStatus(EXTENSION_VERSION), model: "managed-workspace" });
-      if (message.action === "subscribe") {
-        const siteTabId = sender.tab?.id;
-        if (!Number.isInteger(siteTabId)) throw new Error("Subscriptions are only allowed from an approved web page.");
-        const frameId = Number.isInteger(sender.frameId) ? sender.frameId : 0;
-        subscribers.set(`${siteTabId}:${frameId}`, { tabId: siteTabId, frameId, origin });
-        return response(message.requestId, true, { subscribed: true });
-      }
-      return response(message.requestId, true, await handleWorkspaceAction(origin, message.action, message.data));
-    } catch (error) {
-      return response(message.requestId, false, void 0, error instanceof Error ? error.message : "The extension could not complete the command.");
-    }
-  })().then(sendResponse);
-  return true;
+
+  return false;
 });
-chrome.tabs.onUpdated.addListener(async (tabId, _changeInfo, tab) => {
-  await restoreWorkspaces();
-  const workspace = matchingWorkspace(tabId);
-  if (workspace && Number.isInteger(tab.id)) await broadcast(workspace, { type: "workspace-tab-updated", workspaceId: workspace.id, tab: toBrowserTab(tab) });
-});
-chrome.tabs.onActivated.addListener(async ({ tabId }) => {
-  await restoreWorkspaces();
-  const workspace = matchingWorkspace(tabId);
-  if (!workspace) return;
-  try {
-    workspace.activeTabId = tabId;
-    await persistWorkspaces();
-    await broadcast(workspace, { type: "workspace-tab-activated", workspaceId: workspace.id, tab: toBrowserTab(await chrome.tabs.get(tabId)) });
-  } catch {
-  }
-});
-chrome.tabs.onRemoved.addListener(async (tabId) => {
-  await restoreWorkspaces();
-  const workspace = matchingWorkspace(tabId);
-  attachedDebuggerTabs.delete(tabId);
-  if (!workspace) return;
-  workspace.tabIds = workspace.tabIds.filter((id) => id !== tabId);
-  if (workspace.activeTabId === tabId) workspace.activeTabId = workspace.tabIds[0] ?? null;
-  if (workspace.tabIds.length === 0) {
-    workspaces.delete(workspace.id);
-    await persistWorkspaces();
-    await broadcast(workspace, { type: "workspace-closed", workspaceId: workspace.id, reason: "The final managed tab was closed." });
-  } else {
-    await persistWorkspaces();
-    await broadcast(workspace, { type: "workspace-tab-removed", workspaceId: workspace.id, tabId });
-    await broadcast(workspace, { type: "workspace-updated", workspace });
-  }
-});
-chrome.debugger.onDetach.addListener((source) => {
-  if (Number.isInteger(source.tabId)) attachedDebuggerTabs.delete(source.tabId);
-});
-//# sourceMappingURL=extension-worker.js.map
