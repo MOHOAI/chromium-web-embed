@@ -32,6 +32,6 @@ describe("release assets", () => {
     const reference = readFileSync(resolve(root, "examples/gemini-computer-use.ts"), "utf8");
     expect(agentGuide).toContain("client.setAgentControl(false)");
     expect(reference).toContain("createManagedBrowserAgent");
-    expect(reference).toContain("agent.snapshot()");
+    expect(reference).toContain("ComputerUseAgentRunner");
   });
 });
