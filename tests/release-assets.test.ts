@@ -21,7 +21,7 @@ describe("release assets", () => {
       "docs/guides/react.md",
       "docs/guides/backend-coordination.md",
       "docs/guides/ai-agent.md",
-      "examples/ai-agent-reference.ts",
+      "examples/gemini-computer-use.ts",
     ];
 
     for (const file of requiredFiles) {
@@ -29,7 +29,7 @@ describe("release assets", () => {
     }
 
     const agentGuide = readFileSync(resolve(root, "docs/guides/ai-agent.md"), "utf8");
-    const reference = readFileSync(resolve(root, "examples/ai-agent-reference.ts"), "utf8");
+    const reference = readFileSync(resolve(root, "examples/gemini-computer-use.ts"), "utf8");
     expect(agentGuide).toContain("client.setAgentControl(false)");
     expect(reference).toContain("createManagedBrowserAgent");
     expect(reference).toContain("agent.snapshot()");
