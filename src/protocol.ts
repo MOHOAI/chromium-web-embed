@@ -30,6 +30,8 @@ export const TAB_ACTIONS = [
   "workspaceWindowMode",
   "workspaceSetZoom",
   "workspacePrintPdf",
+  "workspaceWaitForSelector",
+  "workspaceStorage",
   "agentExecute",
 ] as const;
 

@@ -29,6 +29,8 @@
     "workspaceWindowMode",
     "workspaceSetZoom",
     "workspacePrintPdf",
+    "workspaceWaitForSelector",
+    "workspaceStorage",
     "agentExecute"
   ]);
 

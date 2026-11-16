@@ -1,11 +1,12 @@
 const BRIDGE_CHANNEL = "real-browser-web/v4";
-const EXTENSION_VERSION = "4.1.0";
+const EXTENSION_VERSION = "4.2.0";
 const STORAGE_KEY = "managedBrowserWorkspaces";
 
 const workspaces = new Map();
 const subscribers = new Set();
 const attachedDebuggerTabs = new Set();
 const cursorByTab = new Map();
+let restoredOnce = false;
 
 function safeOrigin(urlStr) {
   try {
@@ -31,6 +32,7 @@ async function persistWorkspaces() {
 }
 
 async function restoreWorkspaces() {
+  if (restoredOnce && workspaces.size > 0) return;
   try {
     const data = await chrome.storage.session.get(STORAGE_KEY);
     const list = data?.[STORAGE_KEY];
@@ -39,6 +41,7 @@ async function restoreWorkspaces() {
         if (ws && ws.id) workspaces.set(ws.id, ws);
       }
     }
+    restoredOnce = true;
   } catch {}
 }
 
@@ -52,9 +55,42 @@ function broadcastEvent(event) {
   }
 }
 
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  attachedDebuggerTabs.delete(tabId);
+  cursorByTab.delete(tabId);
+  subscribers.delete(tabId);
+  await restoreWorkspaces();
+  let changed = false;
+  for (const ws of workspaces.values()) {
+    if (ws.tabIds.includes(tabId)) {
+      ws.tabIds = ws.tabIds.filter((id) => id !== tabId);
+      if (ws.activeTabId === tabId) ws.activeTabId = ws.tabIds[0] || null;
+      changed = true;
+      broadcastEvent({ type: "tab.removed", workspaceId: ws.id, tabId, timestamp: Date.now() });
+    }
+  }
+  if (changed) await persistWorkspaces();
+});
+
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  await restoreWorkspaces();
+  for (const ws of workspaces.values()) {
+    if (ws.tabIds.includes(tabId) && ws.activeTabId !== tabId) {
+      ws.activeTabId = tabId;
+      await persistWorkspaces();
+      broadcastEvent({ type: "tab.activated", workspaceId: ws.id, tabId, timestamp: Date.now() });
+    }
+  }
+});
+
 async function ensureDebugger(tabId) {
   if (attachedDebuggerTabs.has(tabId)) return;
-  await chrome.debugger.attach({ tabId }, "1.3");
+  try {
+    await chrome.debugger.attach({ tabId }, "1.3");
+  } catch (err) {
+    const msg = String(err?.message || err);
+    if (!msg.includes("Already attached")) throw err;
+  }
   attachedDebuggerTabs.add(tabId);
 }
 
@@ -62,12 +98,35 @@ chrome.debugger.onDetach.addListener((source) => {
   if (source?.tabId) attachedDebuggerTabs.delete(source.tabId);
 });
 
-function cdpSend(tabId, method, params = {}) {
-  return chrome.debugger.sendCommand({ tabId }, method, params);
+async function cdpSend(tabId, method, params = {}) {
+  await ensureDebugger(tabId);
+  try {
+    return await chrome.debugger.sendCommand({ tabId }, method, params);
+  } catch (err) {
+    const msg = String(err?.message || err);
+    if (msg.includes("not attached") || msg.includes("Detached")) {
+      attachedDebuggerTabs.delete(tabId);
+      await ensureDebugger(tabId);
+      return chrome.debugger.sendCommand({ tabId }, method, params);
+    }
+    throw err;
+  }
+}
+
+async function waitForTabComplete(tabId, timeoutMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.status === "complete") return;
+    } catch {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
 }
 
 async function getViewportMetrics(tabId) {
-  await ensureDebugger(tabId);
   const metrics = await cdpSend(tabId, "Page.getLayoutMetrics");
   const layout = metrics?.cssLayoutViewport || metrics?.layoutViewport || {};
   return {
@@ -82,7 +141,7 @@ function resolveCoord(val, dim, space) {
     const clamped = Math.max(0, Math.min(999, val));
     return Math.round((clamped / 1000) * dim);
   }
-  return Math.round(val);
+  return Math.max(0, Math.min(dim - 1, Math.round(val)));
 }
 
 function modifierBitmask(modifiers = []) {
@@ -184,7 +243,6 @@ async function dispatchKey(tabId, type, rawKey, modifiersMask = 0) {
 }
 
 async function captureTabScreenshot(tabId, options = {}) {
-  await ensureDebugger(tabId);
   const tab = await chrome.tabs.get(tabId);
   const metrics = await getViewportMetrics(tabId);
   const format = options.format === "jpeg" ? "jpeg" : "png";
@@ -267,7 +325,6 @@ async function extractInteractiveElements(tabId) {
 
 async function executeUnifiedAction(tabId, action) {
   const started = Date.now();
-  await ensureDebugger(tabId);
   const metrics = await getViewportMetrics(tabId);
   const space = action.coordinateSpace || "pixels";
   const modMask = modifierBitmask(action.modifiers);
@@ -525,16 +582,20 @@ async function executeUnifiedAction(tabId, action) {
     case "navigate": {
       if (!safeOrigin(action.url)) throw new Error(`Blocked invalid URL: ${action.url}`);
       await chrome.tabs.update(tabId, { url: action.url });
+      await waitForTabComplete(tabId);
       break;
     }
     case "go_back":
       await chrome.tabs.goBack(tabId);
+      await waitForTabComplete(tabId);
       break;
     case "go_forward":
       await chrome.tabs.goForward(tabId);
+      await waitForTabComplete(tabId);
       break;
     case "reload":
       await chrome.tabs.reload(tabId);
+      await waitForTabComplete(tabId);
       break;
     case "wait":
       await new Promise((r) => setTimeout(r, Math.max(0, (action.seconds || 1) * 1000)));
@@ -548,15 +609,13 @@ async function executeUnifiedAction(tabId, action) {
       const ry0 = resolveCoord(y0, metrics.height, space);
       const rx1 = resolveCoord(x1, metrics.width, space);
       const ry1 = resolveCoord(y1, metrics.height, space);
+      const cx = Math.min(rx0, rx1);
+      const cy = Math.min(ry0, ry1);
+      const cw = Math.min(metrics.width - cx, Math.max(10, Math.abs(rx1 - rx0)));
+      const ch = Math.min(metrics.height - cy, Math.max(10, Math.abs(ry1 - ry0)));
       screenshot = await captureTabScreenshot(tabId, {
         format: "png",
-        clip: {
-          x: Math.min(rx0, rx1),
-          y: Math.min(ry0, ry1),
-          width: Math.max(10, Math.abs(rx1 - rx0)),
-          height: Math.max(10, Math.abs(ry1 - ry0)),
-          scale: 1,
-        },
+        clip: { x: cx, y: cy, width: cw, height: ch, scale: 1 },
       });
       break;
     }
@@ -591,6 +650,7 @@ function getWorkspaceForOrigin(origin, workspaceId) {
 }
 
 async function handleBridgeCommand(command, sender) {
+  await restoreWorkspaces();
   const origin = pageOrigin(sender);
   const payload = command.payload || {};
 
@@ -604,6 +664,7 @@ async function handleBridgeCommand(command, sender) {
         capabilities: [
           "workspace",
           "cdp-input",
+          "cdp-auto-reattach",
           "dom-inspection",
           "window-modes",
           "print-pdf",
@@ -675,7 +736,9 @@ async function handleBridgeCommand(command, sender) {
       const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
       const tabId = payload.tabId || ws.activeTabId;
       if (!safeOrigin(payload.url)) throw new Error("Invalid HTTP(S) URL");
-      return chrome.tabs.update(tabId, { url: payload.url });
+      const updated = await chrome.tabs.update(tabId, { url: payload.url });
+      await waitForTabComplete(tabId);
+      return updated;
     }
 
     case "workspaceActivate": {
@@ -687,19 +750,25 @@ async function handleBridgeCommand(command, sender) {
 
     case "workspaceReload": {
       const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
-      await chrome.tabs.reload(payload.tabId || ws.activeTabId);
+      const tabId = payload.tabId || ws.activeTabId;
+      await chrome.tabs.reload(tabId);
+      await waitForTabComplete(tabId);
       return { ok: true };
     }
 
     case "workspaceBack": {
       const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
-      await chrome.tabs.goBack(payload.tabId || ws.activeTabId);
+      const tabId = payload.tabId || ws.activeTabId;
+      await chrome.tabs.goBack(tabId);
+      await waitForTabComplete(tabId);
       return { ok: true };
     }
 
     case "workspaceForward": {
       const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
-      await chrome.tabs.goForward(payload.tabId || ws.activeTabId);
+      const tabId = payload.tabId || ws.activeTabId;
+      await chrome.tabs.goForward(tabId);
+      await waitForTabComplete(tabId);
       return { ok: true };
     }
 
@@ -769,15 +838,13 @@ async function handleBridgeCommand(command, sender) {
       const ry0 = resolveCoord(y0, metrics.height, space);
       const rx1 = resolveCoord(x1, metrics.width, space);
       const ry1 = resolveCoord(y1, metrics.height, space);
+      const cx = Math.min(rx0, rx1);
+      const cy = Math.min(ry0, ry1);
+      const cw = Math.min(metrics.width - cx, Math.max(10, Math.abs(rx1 - rx0)));
+      const ch = Math.min(metrics.height - cy, Math.max(10, Math.abs(ry1 - ry0)));
       return captureTabScreenshot(tabId, {
         format: "png",
-        clip: {
-          x: Math.min(rx0, rx1),
-          y: Math.min(ry0, ry1),
-          width: Math.max(10, Math.abs(rx1 - rx0)),
-          height: Math.max(10, Math.abs(ry1 - ry0)),
-          scale: 1,
-        },
+        clip: { x: cx, y: cy, width: cw, height: ch, scale: 1 },
       });
     }
 
@@ -825,9 +892,54 @@ async function handleBridgeCommand(command, sender) {
     case "workspacePrintPdf": {
       const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
       const tabId = payload.tabId || ws.activeTabId;
-      await ensureDebugger(tabId);
       const pdf = await cdpSend(tabId, "Page.printToPDF", { printBackground: true });
       return { base64: pdf.data, mimeType: "application/pdf" };
+    }
+
+    case "workspaceWaitForSelector": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      const selector = String(payload.selector || "");
+      const timeoutMs = Math.min(30000, Math.max(200, Number(payload.timeoutMs || 5000)));
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        const res = await chrome.scripting.executeScript({
+          target: { tabId },
+          args: [selector],
+          func: (sel) => Boolean(document.querySelector(sel)),
+        });
+        if (res?.[0]?.result) return { found: true, elapsedMs: Date.now() - start };
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      return { found: false, elapsedMs: Date.now() - start };
+    }
+
+    case "workspaceStorage": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      const res = await chrome.scripting.executeScript({
+        target: { tabId },
+        args: [payload.op || "get", payload.storageType || "local", payload.key || "", payload.value ?? ""],
+        func: (op, storageType, key, value) => {
+          const store = storageType === "session" ? window.sessionStorage : window.localStorage;
+          if (op === "set") {
+            store.setItem(key, String(value));
+            return { ok: true };
+          }
+          if (op === "remove") {
+            store.removeItem(key);
+            return { ok: true };
+          }
+          if (key) return { value: store.getItem(key) };
+          const all = {};
+          for (let i = 0; i < store.length; i++) {
+            const k = store.key(i);
+            if (k) all[k] = store.getItem(k);
+          }
+          return { items: all };
+        },
+      });
+      return res?.[0]?.result;
     }
 
     case "workspaceInput": {
@@ -905,6 +1017,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.scope === "real-browser-popup") {
     (async () => {
+      await restoreWorkspaces();
       if (message.action === "ensure-site-bridge" && message.tabId) {
         try {
           await chrome.scripting.executeScript({

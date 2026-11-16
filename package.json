@@ -1,6 +1,6 @@
 {
   "name": "chromium-web-embed",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "description": "Real Chromium browser workspace embedding, full local browser automation, MCP tools, and multi-provider AI Computer Use runtime (Gemini 4/3.x, Anthropic Claude, OpenAI Responses, and custom VLMs) powered by a Chrome MV3 extension.",
   "license": "MIT",
   "type": "module",
@@ -41,6 +41,7 @@
     "dist",
     "extension",
     "extension-download",
+    "docs",
     "README.md",
     "PUBLISHING.md",
     "LICENSE"

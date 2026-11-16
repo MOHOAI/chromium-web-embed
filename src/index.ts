@@ -338,6 +338,42 @@ export class RealBrowserClient {
     );
   }
 
+  async waitForSelector(
+    selector: string,
+    options?: { timeoutMs?: number; tabId?: number }
+  ): Promise<{ found: boolean; elapsedMs: number }> {
+    return this.request<{ found: boolean; elapsedMs: number }>(
+      "workspaceWaitForSelector",
+      { selector, timeoutMs: options?.timeoutMs, tabId: options?.tabId }
+    );
+  }
+
+  async getStorage(
+    key?: string,
+    options?: { storageType?: "local" | "session"; tabId?: number }
+  ): Promise<{ value?: string | null; items?: Record<string, string> }> {
+    return this.request("workspaceStorage", {
+      op: "get",
+      key,
+      storageType: options?.storageType ?? "local",
+      tabId: options?.tabId,
+    });
+  }
+
+  async setStorage(
+    key: string,
+    value: string,
+    options?: { storageType?: "local" | "session"; tabId?: number }
+  ): Promise<void> {
+    await this.request("workspaceStorage", {
+      op: "set",
+      key,
+      value,
+      storageType: options?.storageType ?? "local",
+      tabId: options?.tabId,
+    });
+  }
+
   async input(input: SharedTabInput, tabId?: number): Promise<void> {
     await this.request("workspaceInput", { input, tabId });
   }
@@ -436,6 +472,9 @@ export class SharedTabViewer {
   private tabId?: number;
   private timer?: ReturnType<typeof setInterval>;
   private lastShot?: SharedTabScreenshot;
+  private readonly onClick: (e: MouseEvent) => void;
+  private readonly onWheel: (e: WheelEvent) => void;
+  private readonly onKeyDown: (e: KeyboardEvent) => void;
 
   constructor(options: SharedTabViewerOptions) {
     this.client = options.client;
@@ -454,7 +493,29 @@ export class SharedTabViewer {
     this.img.tabIndex = 0;
     this.container.appendChild(this.img);
 
-    this.bindInputEvents();
+    this.onClick = (e: MouseEvent) => {
+      const coords = this.mapPointerCoords(e);
+      if (!coords) return;
+      void this.client.input(
+        { type: "pointer", action: "click", x: coords.x, y: coords.y, button: "left" },
+        this.tabId
+      );
+    };
+    this.onWheel = (e: WheelEvent) => {
+      const coords = this.mapPointerCoords(e);
+      if (!coords) return;
+      void this.client.input(
+        { type: "wheel", x: coords.x, y: coords.y, deltaX: e.deltaX, deltaY: e.deltaY },
+        this.tabId
+      );
+    };
+    this.onKeyDown = (e: KeyboardEvent) => {
+      void this.client.input({ type: "key", action: "press", key: e.key }, this.tabId);
+    };
+
+    this.img.addEventListener("click", this.onClick);
+    this.img.addEventListener("wheel", this.onWheel);
+    this.img.addEventListener("keydown", this.onKeyDown);
   }
 
   private mapPointerCoords(e: MouseEvent): { x: number; y: number } | null {
@@ -467,37 +528,6 @@ export class SharedTabViewer {
       x: Math.round((e.clientX - rect.left) * scaleX),
       y: Math.round((e.clientY - rect.top) * scaleY),
     };
-  }
-
-  private bindInputEvents(): void {
-    this.img.addEventListener("click", (e) => {
-      const coords = this.mapPointerCoords(e);
-      if (!coords) return;
-      void this.client.input(
-        { type: "pointer", action: "click", x: coords.x, y: coords.y, button: "left" },
-        this.tabId
-      );
-    });
-    this.img.addEventListener("wheel", (e) => {
-      const coords = this.mapPointerCoords(e);
-      if (!coords) return;
-      void this.client.input(
-        {
-          type: "wheel",
-          x: coords.x,
-          y: coords.y,
-          deltaX: e.deltaX,
-          deltaY: e.deltaY,
-        },
-        this.tabId
-      );
-    });
-    this.img.addEventListener("keydown", (e) => {
-      void this.client.input(
-        { type: "key", action: "press", key: e.key },
-        this.tabId
-      );
-    });
   }
 
   start(): void {
@@ -532,6 +562,9 @@ export class SharedTabViewer {
 
   dispose(): void {
     this.stop();
+    this.img.removeEventListener("click", this.onClick);
+    this.img.removeEventListener("wheel", this.onWheel);
+    this.img.removeEventListener("keydown", this.onKeyDown);
     this.img.remove();
   }
 }
@@ -622,6 +655,19 @@ export class ManagedBrowserAgent {
     return this.executeComputerAction(action, { tabId });
   }
 
+  async executeBatch(
+    actions: UnifiedComputerAction[],
+    options?: { tabId?: number; stopOnError?: boolean }
+  ): Promise<AgentExecutionResult[]> {
+    const results: AgentExecutionResult[] = [];
+    for (const act of actions) {
+      const res = await this.execute(act, options?.tabId);
+      results.push(res);
+      if (!res.ok && options?.stopOnError !== false) break;
+    }
+    return results;
+  }
+
   async open(url: string, active = true): Promise<BrowserTab> {
     const check = this.safety.isUrlAllowed(url);
     if (!check.allowed) throw new Error(check.reason);
@@ -691,6 +737,28 @@ export class ManagedBrowserAgent {
 
   async getPageText(tabId?: number): Promise<{ title: string; url: string; text: string }> {
     return this.client.getPageText(tabId);
+  }
+
+  async waitForSelector(
+    selector: string,
+    options?: { timeoutMs?: number; tabId?: number }
+  ): Promise<{ found: boolean; elapsedMs: number }> {
+    return this.client.waitForSelector(selector, options);
+  }
+
+  async getStorage(
+    key?: string,
+    options?: { storageType?: "local" | "session"; tabId?: number }
+  ): Promise<{ value?: string | null; items?: Record<string, string> }> {
+    return this.client.getStorage(key, options);
+  }
+
+  async setStorage(
+    key: string,
+    value: string,
+    options?: { storageType?: "local" | "session"; tabId?: number }
+  ): Promise<void> {
+    return this.client.setStorage(key, value, options);
   }
 
   async screenshot(options?: {

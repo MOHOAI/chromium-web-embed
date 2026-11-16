@@ -3,7 +3,10 @@ import {
   GeminiComputerUseAdapter,
   AnthropicComputerUseAdapter,
   OpenAIComputerUseAdapter,
+  GenericComputerUseAdapter,
   SafetyPolicyEngine,
+  denormalizeCoordinate,
+  getMcpBrowserTools,
 } from "../src/index.js";
 
 describe("Multi-provider Computer Use Adapters", () => {
@@ -84,5 +87,14 @@ describe("Multi-provider Computer Use Adapters", () => {
     expect(engine.isUrlAllowed("https://aistudio.google.com/docs").allowed).toBe(true);
     expect(engine.isUrlAllowed("https://evil.com").allowed).toBe(false);
     expect(engine.isUrlAllowed("https://other.org").allowed).toBe(false);
+  });
+
+  it("denormalizes 0-999 coordinates and exposes MCP & Generic adapters", () => {
+    expect(denormalizeCoordinate(500, 1440)).toBe(720);
+    expect(denormalizeCoordinate(1200, 900)).toBe(899);
+    const generic = new GenericComputerUseAdapter();
+    expect(generic.isComplete({ done: true })).toBe(true);
+    const mcpTools = getMcpBrowserTools();
+    expect(mcpTools.some((t) => t.name === "browser_observe")).toBe(true);
   });
 });
