@@ -18,7 +18,7 @@ import {
   toAnthropicTools,
   toOpenAITools,
   toMcpTools,
-} from "chromium-web-embed";
+} from "../src/index.js";
 
 export async function startMohoFullAgent(previewContainer: HTMLElement) {
   // 1. Connect to the Moho Browser Workspace Chrome Extension
