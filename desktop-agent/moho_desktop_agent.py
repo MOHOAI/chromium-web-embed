@@ -311,7 +311,7 @@ class HiddenDesktopEngine:
         self.hdesk: Optional[int] = None
         self.active = False
         self.emergency_stopped = False
-        self.virtual_cursor = {"x": width // 2, "y": height // 2}
+        self.virtual_cursor = {"x": self.width // 2, "y": self.height // 2}
         self.launched_pids: List[int] = []
         self._cmd_q: "queue.Queue[Tuple[Callable[[], Any], queue.Queue[Tuple[bool, Any]]]]" = queue.Queue()
         self._worker: Optional[threading.Thread] = None
