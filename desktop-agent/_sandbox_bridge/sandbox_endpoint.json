@@ -1,0 +1,8 @@
+{
+  "ip": "172.18.129.137",
+  "port": 47892,
+  "wsUrl": "ws://172.18.129.137:47892",
+  "mode": "windows_sandbox_real_input",
+  "version": "6.3.0",
+  "startedAt": 1795277221159
+}

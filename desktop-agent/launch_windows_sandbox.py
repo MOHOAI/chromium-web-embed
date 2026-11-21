@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """
-Moho Windows Sandbox Launcher & Transparent Host WebSocket Relay (v6.3.0)
+Moho Windows Sandbox Launcher & Transparent Host WebSocket Relay (v7.0.0)
 -------------------------------------------------------------------------
 Launches a TRUE isolated Windows 10/11 desktop inside Windows Sandbox with:
-  - Full 100% real Win32 SendInput (Start Menu, Taskbar, Drag & Drop, UWP/WinUI apps, Explorer)
-  - Zero interference with your host mouse cursor, keyboard focus, or screen
-  - Zero Python downloads inside Sandbox (maps your host Python + .venv read-only)
+  - 100% real Win32 SendInput (Start Menu, Taskbar, Drag & Drop, UWP/WinUI apps, Explorer)
+  - Automatic Persistent Shared Storage (%USERPROFILE%\\MohoSandboxData -> C:\\MohoPersistent):
+      * Workspace\\     -> Persistent AI & user files (never deleted when Sandbox closes)
+      * EdgeProfile\\   -> Persistent Microsoft Edge logins, cookies, bookmarks & extensions
+      * ChromeProfile\\ -> Persistent Google Chrome profile (for Chrome Portable)
+      * PortableApps\\  -> Portable apps auto-added to PATH inside Sandbox
+      * Downloads\\     -> Persistent downloads folder
+      * startup_apps.bat-> Optional auto-run script executed on every Sandbox boot
+  - Zero Python downloads inside Sandbox (maps host Python + .venv read-only)
   - Transparent local WebSocket Relay on ws://127.0.0.1:47892 -> ws://<SANDBOX_IP>:47892
 
 REQUIREMENTS:
   - Windows 10 (build 18342+) or Windows 11: Pro, Enterprise, or Education edition
     (Windows Sandbox is NOT supported on Windows Home edition).
-  - Hardware virtualization enabled in BIOS/UEFI.
-  - Windows Sandbox optional feature enabled:
-      dism /online /Enable-Feature /FeatureName:Containers-DisposableClientVM /All
 """
 
 from __future__ import annotations
@@ -27,13 +30,27 @@ import secrets
 import shutil
 import subprocess
 import sys
-import time
 from typing import Any, Optional
 import xml.sax.saxutils as saxutils
 
-LAUNCHER_VERSION = "6.3.0"
+LAUNCHER_VERSION = "7.0.0"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 47892
+
+
+def ensure_persistent_sandbox_dirs(custom_root: Optional[Path] = None) -> Path:
+    root = (custom_root.resolve() if custom_root else (Path.home() / "MohoSandboxData"))
+    for sub in ("Workspace", "EdgeProfile", "ChromeProfile", "PortableApps", "Downloads"):
+        (root / sub).mkdir(parents=True, exist_ok=True)
+    startup_bat = root / "startup_apps.bat"
+    if not startup_bat.exists():
+        startup_bat.write_text(
+            "@echo off\n"
+            "REM Add any portable apps or silent installers you want launched automatically on every Sandbox boot.\n"
+            "REM Example: start \"\" msedge.exe --user-data-dir=\"C:\\MohoPersistent\\EdgeProfile\"\n",
+            encoding="utf-8",
+        )
+    return root
 
 
 def find_windows_sandbox_exe() -> Optional[Path]:
@@ -51,6 +68,7 @@ def find_windows_sandbox_exe() -> Optional[Path]:
 def build_wsb_xml(
     python_base_dir: Path,
     agent_dir: Path,
+    persistent_dir: Path,
     workspace_dir: Optional[Path] = None,
     memory_mb: int = 4096,
     enable_vgpu: bool = True,
@@ -65,6 +83,11 @@ def build_wsb_xml(
         f"""    <MappedFolder>
       <HostFolder>{esc(str(agent_dir.resolve()))}</HostFolder>
       <SandboxFolder>C:\\MohoAgent</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>""",
+        f"""    <MappedFolder>
+      <HostFolder>{esc(str(persistent_dir.resolve()))}</HostFolder>
+      <SandboxFolder>C:\\MohoPersistent</SandboxFolder>
       <ReadOnly>false</ReadOnly>
     </MappedFolder>""",
     ]
@@ -94,7 +117,7 @@ def build_wsb_xml(
     )
 
 
-def save_host_session_file(port: int, token: str, sandbox_ws_url: str = "") -> Path:
+def save_host_session_file(port: int, token: str, persistent_dir: Path, sandbox_ws_url: str = "") -> Path:
     base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "MohoDesktopAgent"
     base.mkdir(parents=True, exist_ok=True)
     session_path = base / "session.json"
@@ -106,6 +129,7 @@ def save_host_session_file(port: int, token: str, sandbox_ws_url: str = "") -> P
                 "token": token,
                 "version": LAUNCHER_VERSION,
                 "mode": "windows_sandbox_real_input",
+                "persistentDir": str(persistent_dir),
                 "sandboxWsUrl": sandbox_ws_url,
             },
             indent=2,
@@ -116,11 +140,12 @@ def save_host_session_file(port: int, token: str, sandbox_ws_url: str = "") -> P
 
 
 class SandboxWebSocketRelay:
-    def __init__(self, endpoint_file: Path, host: str, port: int, token: str) -> None:
+    def __init__(self, endpoint_file: Path, host: str, port: int, token: str, persistent_dir: Path) -> None:
         self.endpoint_file = endpoint_file
         self.host = host
         self.port = port
         self.token = token
+        self.persistent_dir = persistent_dir
         self.sandbox_ws_url: Optional[str] = None
 
     def read_sandbox_endpoint(self) -> Optional[str]:
@@ -141,9 +166,10 @@ class SandboxWebSocketRelay:
             url = self.read_sandbox_endpoint()
             if url and url != self.sandbox_ws_url:
                 self.sandbox_ws_url = url
-                save_host_session_file(self.port, self.token, url)
+                save_host_session_file(self.port, self.token, self.persistent_dir, url)
                 print(f"\n[READY] Windows Sandbox Real-Desktop Agent is ONLINE at {url}")
                 print(f"[READY] Host Relay active on ws://{self.host}:{self.port}")
+                print(f"[READY] Persistent Data Folder: {self.persistent_dir} -> C:\\MohoPersistent")
                 print("[TIP] Keep the Windows Sandbox window open in the background (do not minimize it) for smooth live streaming.")
                 announced = True
             elif not url and not announced:
@@ -218,7 +244,7 @@ async def run_launcher(args: argparse.Namespace) -> None:
     try:
         import websockets  # type: ignore
     except ImportError:
-        print("[ERROR] Missing 'websockets' package. Run desktop-agent/install_windows.ps1 first.", file=sys.stderr)
+        print("[ERROR] Missing 'websockets' package. Run desktop-agent/setup_one_click.bat first.", file=sys.stderr)
         sys.exit(1)
 
     agent_dir = Path(__file__).resolve().parent
@@ -231,6 +257,8 @@ async def run_launcher(args: argparse.Namespace) -> None:
     if endpoint_file.exists():
         endpoint_file.unlink()
 
+    persistent_dir = ensure_persistent_sandbox_dirs(Path(args.persistent_dir) if args.persistent_dir else None)
+
     token = "" if args.no_auth else (args.token or secrets.token_urlsafe(24))
     token_file.write_text(token, encoding="utf-8")
 
@@ -240,21 +268,23 @@ async def run_launcher(args: argparse.Namespace) -> None:
     wsb_xml = build_wsb_xml(
         python_base_dir=python_base_dir,
         agent_dir=agent_dir,
+        persistent_dir=persistent_dir,
         workspace_dir=workspace_dir,
         memory_mb=args.memory_mb,
         enable_vgpu=not args.no_vgpu,
     )
     wsb_file.write_text(wsb_xml, encoding="utf-8")
-    session_path = save_host_session_file(args.port, token)
+    session_path = save_host_session_file(args.port, token, persistent_dir)
 
-    print("=" * 72)
+    print("=" * 74)
     print(f"  Moho Windows Sandbox Real-Desktop Launcher v{LAUNCHER_VERSION}")
     print("  Requirement: Windows 10/11 Pro, Enterprise, or Education (NOT Home)")
     print(f"  Host Relay Endpoint: ws://{args.host}:{args.port}")
-    print(f"  Auth Token: {token if token else '(disabled -- local dev mode)'}")
-    print(f"  WSB Config: {wsb_file}")
-    print(f"  Session File: {session_path}")
-    print("=" * 72)
+    print(f"  Auth Token:          {token if token else '(disabled -- local dev mode)'}")
+    print(f"  Persistent Storage:  {persistent_dir}  <->  C:\\MohoPersistent")
+    print(f"  WSB Config:          {wsb_file}")
+    print(f"  Session File:        {session_path}")
+    print("=" * 74)
 
     if not args.relay_only:
         wsb_exe = find_windows_sandbox_exe()
@@ -270,7 +300,7 @@ async def run_launcher(args: argparse.Namespace) -> None:
         subprocess.Popen([str(wsb_exe), str(wsb_file)], close_fds=True)
         print("[WAIT] Waiting for Windows Sandbox to boot and announce its Real-Input Agent...")
 
-    relay = SandboxWebSocketRelay(endpoint_file, args.host, args.port, token)
+    relay = SandboxWebSocketRelay(endpoint_file, args.host, args.port, token, persistent_dir)
     announcer_task = asyncio.create_task(relay.wait_for_sandbox_announcer())
     try:
         async with websockets.serve(
@@ -295,7 +325,8 @@ def main() -> None:
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--token", default="")
-    parser.add_argument("--workspace", default=None, help="Optional host folder to map into C:\\MohoWorkspace inside Sandbox")
+    parser.add_argument("--persistent-dir", default=None, help="Host folder mapped to C:\\MohoPersistent (default: %%USERPROFILE%%\\MohoSandboxData)")
+    parser.add_argument("--workspace", default=None, help="Optional extra host project folder mapped into C:\\MohoWorkspace")
     parser.add_argument("--memory-mb", type=int, default=4096, help="RAM in MB allocated to Windows Sandbox (default: 4096)")
     parser.add_argument("--no-vgpu", action="store_true", help="Disable virtualized GPU (uses software WARP)")
     parser.add_argument("--no-auth", action="store_true")

@@ -649,3 +649,33 @@ export function createWindowsDesktopAgent(
 ): WindowsDesktopAgentClient {
   return new WindowsDesktopAgentClient(options);
 }
+
+
+export const MOHO_PROTOCOL_URLS = {
+  startSandbox: "moho-agent://start-sandbox",
+  startAgent: "moho-agent://start-agent",
+  openWorkspace: "moho-agent://open-workspace",
+  openPersistent: "moho-agent://open-persistent",
+} as const;
+
+export type MohoProtocolAction = keyof typeof MOHO_PROTOCOL_URLS;
+
+export const MOHO_DOWNLOAD_URLS = {
+  extensionZip: "https://raw.githubusercontent.com/MOHOAI/chromium-web-embed/main/extension-download/real-browser-web-bridge-extension.zip",
+  desktopAgentZip: "https://raw.githubusercontent.com/MOHOAI/chromium-web-embed/main/desktop-agent-download/moho-desktop-agent-windows.zip",
+  repository: "https://github.com/MOHOAI/chromium-web-embed",
+  releases: "https://github.com/MOHOAI/chromium-web-embed/releases",
+} as const;
+
+export function triggerMohoProtocol(action: MohoProtocolAction): string {
+  const uri = MOHO_PROTOCOL_URLS[action];
+  if (typeof window !== "undefined" && typeof document !== "undefined") {
+    const a = document.createElement("a");
+    a.href = uri;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  return uri;
+}

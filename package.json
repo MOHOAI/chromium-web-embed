@@ -1,6 +1,6 @@
 {
   "name": "chromium-web-embed",
-  "version": "6.3.0",
+  "version": "7.0.0",
   "description": "Real Chromium browser workspace embedding, Windows 10/11 Virtual Desktop Computer-Use agent with live screen preview, Local Folder Brain (File System Access API), MCP tools, and multi-provider AI runtime (Gemini, Claude, OpenAI/ChatGPT, MOHO AI) powered by a Chrome MV3 extension.",
   "license": "MIT",
   "type": "module",
@@ -65,10 +65,11 @@
     "docs",
     "README.md",
     "PUBLISHING.md",
-    "LICENSE"
+    "LICENSE",
+    "desktop-agent-download"
   ],
   "scripts": {
-    "build": "tsup && node scripts/prepare-extension.mjs && node scripts/package-extension.mjs",
+    "build": "tsup && node scripts/prepare-extension.mjs && node scripts/package-extension.mjs && node scripts/package-desktop-agent.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

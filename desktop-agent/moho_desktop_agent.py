@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-AGENT_VERSION = "6.3.0"
+AGENT_VERSION = "7.0.0"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 47892
 MIN_WIN10_BUILD = 10240
@@ -1513,6 +1513,7 @@ class MohoDesktopAgentServer:
                 "cursor": d.virtual_cursor,
                 "streaming": self.clients.get(ws, StreamConfig()).active,
                 "workspaceRoot": str(self.terminal.workspace_root) if self.terminal.workspace_root else None,
+                "persistentDir": "C:\\MohoPersistent" if Path("C:\\MohoPersistent").exists() else str(Path.home() / "MohoSandboxData"),
             }
 
         if action == "emergency_stop":

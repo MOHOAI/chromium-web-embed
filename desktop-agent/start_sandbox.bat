@@ -1,5 +1,5 @@
 @echo off
-title Moho Windows Sandbox Real-Desktop Agent Launcher (v6.3.0)
+title Moho Windows Sandbox Real-Desktop Agent Launcher (v7.0.0)
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" (
