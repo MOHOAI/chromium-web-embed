@@ -33,7 +33,7 @@ import sys
 from typing import Any, Optional
 import xml.sax.saxutils as saxutils
 
-LAUNCHER_VERSION = "7.0.1"
+LAUNCHER_VERSION = "7.0.2"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 47892
 
@@ -41,6 +41,29 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 
 SESSION_HTTP_PORT = 47893
+
+def is_relay_already_running() -> bool:
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{SESSION_HTTP_PORT}/session", timeout=1.2) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def is_windows_sandbox_running() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        out = subprocess.check_output(
+            ["tasklist", "/FI", "IMAGENAME eq WindowsSandboxClient.exe", "/NH"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            creationflags=0x08000000,
+        )
+        return "windowssandboxclient.exe" in out.lower()
+    except Exception:
+        return False
 
 
 def start_local_session_http_server(state_getter) -> Optional[ThreadingHTTPServer]:
@@ -337,7 +360,13 @@ async def run_launcher(args: argparse.Namespace) -> None:
     token_file = bridge_dir / "token.txt"
     wsb_file = bridge_dir / "moho_sandbox.wsb"
 
-    if endpoint_file.exists():
+    # Single-Instance Guard: if host relay is already active, do not spawn a duplicate Windows Sandbox!
+    if is_relay_already_running():
+        print("[INFO] Moho Windows Sandbox Host Relay is already running on ws://127.0.0.1:47892. Reusing active instance.")
+        return
+
+    sandbox_already_up = is_windows_sandbox_running()
+    if not sandbox_already_up and endpoint_file.exists():
         endpoint_file.unlink()
 
     persistent_dir = ensure_persistent_sandbox_dirs(Path(args.persistent_dir) if args.persistent_dir else None)
@@ -369,7 +398,7 @@ async def run_launcher(args: argparse.Namespace) -> None:
     print(f"  Session File:        {session_path}")
     print("=" * 74)
 
-    if not args.relay_only:
+    if not args.relay_only and not sandbox_already_up:
         wsb_exe = find_windows_sandbox_exe()
         if not wsb_exe:
             print("\n[ERROR] WindowsSandbox.exe was not found on this PC!", file=sys.stderr)
@@ -384,6 +413,10 @@ async def run_launcher(args: argparse.Namespace) -> None:
         if not getattr(args, "visible", False):
             start_stealth_hide_sandbox_window_thread()
         print("[WAIT] Waiting for Windows Sandbox to boot and announce its Real-Input Agent...")
+    elif sandbox_already_up:
+        print("[INFO] Existing Windows Sandbox instance detected — reusing it without opening a second instance.")
+        if not getattr(args, "visible", False):
+            start_stealth_hide_sandbox_window_thread()
 
     relay = SandboxWebSocketRelay(endpoint_file, args.host, args.port, token, persistent_dir)
     start_local_session_http_server(

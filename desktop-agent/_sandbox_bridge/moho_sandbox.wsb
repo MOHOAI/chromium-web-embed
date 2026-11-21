@@ -14,6 +14,11 @@
       <SandboxFolder>C:\MohoAgent</SandboxFolder>
       <ReadOnly>false</ReadOnly>
     </MappedFolder>
+    <MappedFolder>
+      <HostFolder>C:\Users\mohoa\MohoSandboxData</HostFolder>
+      <SandboxFolder>C:\MohoPersistent</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
   </MappedFolders>
   <LogonCommand>
     <Command>cmd /c C:\MohoAgent\sandbox_bootstrap.bat</Command>
