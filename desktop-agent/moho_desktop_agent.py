@@ -33,6 +33,7 @@ import platform
 import queue
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -42,7 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-AGENT_VERSION = "6.2.0"
+AGENT_VERSION = "6.3.0"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 47892
 MIN_WIN10_BUILD = 10240
@@ -321,6 +322,7 @@ class HiddenDesktopEngine:
         self._drag_window_hwnd: Optional[int] = None
         self._drag_window_offset: Tuple[int, int] = (0, 0)
         self.desktop_name = HIDDEN_DESKTOP_NAME
+        self.mode_name = "hidden_win32_desktop"
         self.hdesk: Optional[int] = None
         self.active = False
         self.emergency_stopped = False
@@ -396,7 +398,7 @@ class HiddenDesktopEngine:
 
         return {
             "ok": True,
-            "mode": "hidden_win32_desktop",
+            "mode": getattr(d, "mode_name", "hidden_win32_desktop"),
             "desktopName": self.desktop_name,
             "virtualDesktopActive": True,
             "width": self.width,
@@ -556,7 +558,7 @@ class HiddenDesktopEngine:
             "height": img.size[1],
             "screenWidth": orig_w,
             "screenHeight": orig_h,
-            "mode": "hidden_win32_desktop",
+            "mode": getattr(d, "mode_name", "hidden_win32_desktop"),
             "capturedAt": int(time.time() * 1000),
         }
 
@@ -860,6 +862,427 @@ class HiddenDesktopEngine:
 # ---------------------------------------------------------------------------
 # 2. Isolated Local Terminal & Multi-Language Code Sandbox (Windows Job Objects)
 # ---------------------------------------------------------------------------
+
+def is_windows_sandbox_env() -> bool:
+    return os.environ.get("USERNAME", "").strip().lower() == "wdagutilityaccount"
+
+
+def detect_reachable_ipv4() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            if ip and not ip.startswith(("127.", "169.254.")):
+                return ip
+        finally:
+            s.close()
+    except Exception:
+        pass
+    try:
+        _, _, ips = socket.gethostbyname_ex(socket.gethostname())
+        for ip in ips:
+            if ip and not ip.startswith(("127.", "169.254.")):
+                return ip
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
+class RealInputDesktopEngine:
+    """
+    100% Real-Input Windows Desktop Engine (designed for Windows Sandbox / VM).
+    Uses hardware-level Win32 SendInput + per-capture mss.MSS() screen streaming so
+    Start Menu, Taskbar, Explorer, Drag & Drop, UWP/WinUI apps, and Chrome work 100%
+    natively inside Windows Sandbox without ever touching the host user's mouse or screen.
+    """
+
+    def __init__(self, width: Optional[int] = None, height: Optional[int] = None) -> None:
+        self.is_sandbox = is_windows_sandbox_env()
+        self.mode_name = "windows_sandbox_real_input" if self.is_sandbox else "real_input_desktop"
+        self.desktop_name = "WindowsSandbox" if self.is_sandbox else "Default"
+        self.active = True
+        self.emergency_stopped = False
+
+        if sys.platform == "win32":
+            user32 = ctypes.windll.user32
+            try:
+                user32.SetProcessDPIAware()
+            except Exception:
+                pass
+            sw = int(user32.GetSystemMetrics(0) or 1920)
+            sh = int(user32.GetSystemMetrics(1) or 1080)
+        else:
+            sw, sh = 1920, 1080
+
+        self.width = int(width) if width is not None else max(800, sw)
+        self.height = int(height) if height is not None else max(600, sh)
+        self.virtual_cursor = {"x": self.width // 2, "y": self.height // 2}
+        self._Image = None
+        try:
+            from PIL import Image  # type: ignore
+            self._Image = Image
+        except Exception:
+            pass
+
+    def _send_mouse_input(self, flags: int, x: Optional[int] = None, y: Optional[int] = None, mouse_data: int = 0) -> None:
+        if sys.platform != "win32":
+            return
+        user32 = ctypes.windll.user32
+        INPUT_MOUSE = 0
+        MOUSEEVENTF_MOVE = 0x0001
+        MOUSEEVENTF_ABSOLUTE = 0x8000
+        MOUSEEVENTF_VIRTUALDESK = 0x4000
+
+        class MOUSEINPUT(ctypes.Structure):
+            _fields_ = [
+                ("dx", wintypes.LONG),
+                ("dy", wintypes.LONG),
+                ("mouseData", wintypes.DWORD),
+                ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)),
+            ]
+
+        class _INPUTUNION(ctypes.Union):
+            _fields_ = [("mi", MOUSEINPUT)]
+
+        class INPUT(ctypes.Structure):
+            _fields_ = [("type", wintypes.DWORD), ("union", _INPUTUNION)]
+
+        dx = 0
+        dy = 0
+        if x is not None and y is not None:
+            dx = int(max(0, min(65535, round(x * 65535 / max(1, self.width - 1)))))
+            dy = int(max(0, min(65535, round(y * 65535 / max(1, self.height - 1)))))
+            flags |= MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+
+        inp = INPUT(type=INPUT_MOUSE, union=_INPUTUNION(mi=MOUSEINPUT(dx=dx, dy=dy, mouseData=mouse_data & 0xFFFFFFFF, dwFlags=flags, time=0, dwExtraInfo=None)))
+        user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+
+    def _send_key_input(self, vk: int = 0, scan: int = 0, flags: int = 0) -> None:
+        if sys.platform != "win32":
+            return
+        user32 = ctypes.windll.user32
+        INPUT_KEYBOARD = 1
+
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [
+                ("wVk", wintypes.WORD),
+                ("wScan", wintypes.WORD),
+                ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)),
+            ]
+
+        class _INPUTUNION(ctypes.Union):
+            _fields_ = [("ki", KEYBDINPUT)]
+
+        class INPUT(ctypes.Structure):
+            _fields_ = [("type", wintypes.DWORD), ("union", _INPUTUNION)]
+
+        inp = INPUT(type=INPUT_KEYBOARD, union=_INPUTUNION(ki=KEYBDINPUT(wVk=vk, wScan=scan, dwFlags=flags, time=0, dwExtraInfo=None)))
+        user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+
+    def _vk_from_name(self, key: str) -> int:
+        k = key.strip().lower()
+        table = {
+            "enter": 0x0D, "return": 0x0D, "tab": 0x09, "escape": 0x1B, "esc": 0x1B,
+            "backspace": 0x08, "space": 0x20, "delete": 0x2E, "del": 0x2E, "insert": 0x2D,
+            "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
+            "left": 0x25, "arrowleft": 0x25, "up": 0x26, "arrowup": 0x26,
+            "right": 0x27, "arrowright": 0x27, "down": 0x28, "arrowdown": 0x28,
+            "ctrl": 0x11, "control": 0x11, "alt": 0x12, "shift": 0x10,
+            "win": 0x5B, "meta": 0x5B, "super": 0x5B, "lwin": 0x5B, "rwin": 0x5C,
+            "f1": 0x70, "f2": 0x71, "f3": 0x72, "f4": 0x73, "f5": 0x74, "f6": 0x75,
+            "f7": 0x76, "f8": 0x77, "f9": 0x78, "f10": 0x79, "f11": 0x7A, "f12": 0x7B,
+        }
+        if k in table:
+            return table[k]
+        if len(k) == 1:
+            return ord(k.upper())
+        return 0x0D
+
+    def create_isolated_desktop(self, launch_app: Optional[str] = None, launch_args: Optional[List[str]] = None) -> Dict[str, Any]:
+        self.active = True
+        if launch_app:
+            self.launch_app_on_hidden_desktop(launch_app, launch_args)
+        return {
+            "ok": True,
+            "mode": self.mode_name,
+            "desktopName": self.desktop_name,
+            "screen": {"width": self.width, "height": self.height},
+            "note": "Running inside full interactive Windows Sandbox / Real-Input desktop.",
+        }
+
+    def close_isolated_desktop(self) -> Dict[str, Any]:
+        return {"ok": True, "mode": self.mode_name, "note": "Close the Windows Sandbox window to dispose the sandbox session cleanly."}
+
+    def launch_app_on_hidden_desktop(self, command: str, args: Optional[List[str]] = None) -> Dict[str, Any]:
+        cmd = (command or "").strip()
+        if not cmd:
+            raise ValueError("Missing command to launch.")
+        argv = [cmd] + [str(a) for a in (args or [])]
+        proc = subprocess.Popen(argv, shell=False, close_fds=True)
+        return {"ok": True, "pid": proc.pid, "command": cmd, "mode": self.mode_name}
+
+    def list_windows(self) -> List[Dict[str, Any]]:
+        if sys.platform != "win32":
+            return []
+        user32 = ctypes.windll.user32
+        wins: List[Dict[str, Any]] = []
+        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def _cb(hwnd, _lp):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return True
+            title_buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, title_buf, length + 1)
+            cls_buf = ctypes.create_unicode_buffer(128)
+            user32.GetClassNameW(hwnd, cls_buf, 128)
+            rect = wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(rect))
+            if rect.right - rect.left <= 0 or rect.bottom - rect.top <= 0:
+                return True
+            wins.append({
+                "hwnd": int(hwnd),
+                "title": title_buf.value,
+                "className": cls_buf.value,
+                "bounds": {"x": rect.left, "y": rect.top, "width": rect.right - rect.left, "height": rect.bottom - rect.top},
+            })
+            return True
+
+        user32.EnumWindows(WNDENUMPROC(_cb), 0)
+        return wins[:80]
+
+    def capture_frame(self, fmt: str = "jpeg", quality: int = 72, max_width: Optional[int] = None) -> Dict[str, Any]:
+        import mss  # type: ignore
+        from PIL import Image  # type: ignore
+
+        with mss.MSS() as sct:
+            mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+            raw = sct.grab(mon)
+            self.width = raw.width
+            self.height = raw.height
+            img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+
+        if max_width and img.width > max_width:
+            ratio = max_width / float(img.width)
+            img = img.resize((int(max_width), max(1, int(img.height * ratio))), Image.Resampling.LANCZOS)
+
+        buf = io.BytesIO()
+        out_fmt = "PNG" if fmt.lower() == "png" else "JPEG"
+        if out_fmt == "JPEG":
+            img.save(buf, format="JPEG", quality=max(20, min(95, quality)), optimize=True)
+            mime = "image/jpeg"
+        else:
+            img.save(buf, format="PNG")
+            mime = "image/png"
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return {
+            "format": out_fmt.lower(),
+            "mimeType": mime,
+            "base64": b64,
+            "dataUrl": f"data:{mime};base64,{b64}",
+            "width": img.width,
+            "height": img.height,
+            "screenWidth": self.width,
+            "screenHeight": self.height,
+            "mode": self.mode_name,
+            "capturedAt": int(time.time() * 1000),
+        }
+
+    def resolve_coords(self, x: Optional[float], y: Optional[float], space: str = "pixels") -> Tuple[int, int]:
+        rx = float(x if x is not None else self.virtual_cursor["x"])
+        ry = float(y if y is not None else self.virtual_cursor["y"])
+        if space == "normalized_1000":
+            return (int(round(rx / 1000.0 * self.width)), int(round(ry / 1000.0 * self.height)))
+        if space == "normalized_1":
+            return (int(round(rx * self.width)), int(round(ry * self.height)))
+        return (int(round(rx)), int(round(ry)))
+
+    def dispatch_mouse(self, action: str, x: int, y: int, button: str = "left", delta_x: int = 0, delta_y: int = 0) -> Dict[str, Any]:
+        self.virtual_cursor = {"x": x, "y": y}
+        LEFTDOWN, LEFTUP = 0x0002, 0x0004
+        RIGHTDOWN, RIGHTUP = 0x0008, 0x0010
+        MIDDLEDOWN, MIDDLEUP = 0x0020, 0x0040
+        XDOWN, XUP = 0x0080, 0x0100
+        WHEEL, HWHEEL = 0x0800, 0x1000
+
+        btn_map = {
+            "left": (LEFTDOWN, LEFTUP, 0),
+            "right": (RIGHTDOWN, RIGHTUP, 0),
+            "middle": (MIDDLEDOWN, MIDDLEUP, 0),
+            "x1": (XDOWN, XUP, 1),
+            "x2": (XDOWN, XUP, 2),
+        }
+        if action == "right_click":
+            down, up, mdata = btn_map["right"]
+        elif action == "middle_click":
+            down, up, mdata = btn_map["middle"]
+        elif action == "x1_click":
+            down, up, mdata = btn_map["x1"]
+        elif action == "x2_click":
+            down, up, mdata = btn_map["x2"]
+        else:
+            down, up, mdata = btn_map.get(button, btn_map["left"])
+
+        if action == "move":
+            self._send_mouse_input(0, x, y)
+        elif action == "mouse_down":
+            self._send_mouse_input(down, x, y, mdata)
+        elif action == "mouse_up":
+            self._send_mouse_input(up, x, y, mdata)
+        elif action in ("click", "right_click", "middle_click", "x1_click", "x2_click"):
+            self._send_mouse_input(0, x, y)
+            time.sleep(0.01)
+            self._send_mouse_input(down, x, y, mdata)
+            time.sleep(0.02)
+            self._send_mouse_input(up, x, y, mdata)
+        elif action == "double_click":
+            self._send_mouse_input(0, x, y)
+            for _ in range(2):
+                self._send_mouse_input(down, x, y, mdata)
+                time.sleep(0.015)
+                self._send_mouse_input(up, x, y, mdata)
+                time.sleep(0.04)
+        elif action == "triple_click":
+            self._send_mouse_input(0, x, y)
+            for _ in range(3):
+                self._send_mouse_input(down, x, y, mdata)
+                time.sleep(0.015)
+                self._send_mouse_input(up, x, y, mdata)
+                time.sleep(0.035)
+        elif action == "scroll":
+            self._send_mouse_input(0, x, y)
+            if delta_y:
+                self._send_mouse_input(WHEEL, None, None, int(-delta_y))
+            if delta_x:
+                self._send_mouse_input(HWHEEL, None, None, int(delta_x))
+        return {"ok": True, "mode": self.mode_name, "cursor": self.virtual_cursor}
+
+    def dispatch_drag(self, points: List[Tuple[int, int]], button: str = "left") -> Dict[str, Any]:
+        if len(points) < 2:
+            return {"ok": False, "error": "Need at least 2 points for drag_and_drop"}
+        sx, sy = points[0]
+        self.dispatch_mouse("mouse_down", sx, sy, button=button)
+        time.sleep(0.05)
+        for i in range(len(points) - 1):
+            x0, y0 = points[i]
+            x1, y1 = points[i + 1]
+            steps = 12
+            for s in range(1, steps + 1):
+                ix = int(round(x0 + (x1 - x0) * s / steps))
+                iy = int(round(y0 + (y1 - y0) * s / steps))
+                self.dispatch_mouse("move", ix, iy, button=button)
+                time.sleep(0.012)
+        ex, ey = points[-1]
+        time.sleep(0.04)
+        self.dispatch_mouse("mouse_up", ex, ey, button=button)
+        return {"ok": True, "mode": self.mode_name, "cursor": self.virtual_cursor}
+
+    def dispatch_text(self, text: str, press_enter: bool = False) -> Dict[str, Any]:
+        KEYEVENTF_UNICODE = 0x0004
+        KEYEVENTF_KEYUP = 0x0002
+        for ch in text:
+            code = ord(ch)
+            self._send_key_input(vk=0, scan=code, flags=KEYEVENTF_UNICODE)
+            self._send_key_input(vk=0, scan=code, flags=KEYEVENTF_UNICODE | KEYEVENTF_KEYUP)
+            time.sleep(0.004)
+        if press_enter:
+            self.dispatch_key("Enter")
+        return {"ok": True, "length": len(text), "mode": self.mode_name}
+
+    def dispatch_key(self, key: str) -> Dict[str, Any]:
+        KEYEVENTF_KEYUP = 0x0002
+        vk = self._vk_from_name(key)
+        self._send_key_input(vk=vk, flags=0)
+        time.sleep(0.015)
+        self._send_key_input(vk=vk, flags=KEYEVENTF_KEYUP)
+        return {"ok": True, "key": key, "mode": self.mode_name}
+
+    def dispatch_hotkey(self, keys: List[str]) -> Dict[str, Any]:
+        KEYEVENTF_KEYUP = 0x0002
+        vks = [self._vk_from_name(k) for k in keys if k]
+        for vk in vks:
+            self._send_key_input(vk=vk, flags=0)
+            time.sleep(0.015)
+        for vk in reversed(vks):
+            self._send_key_input(vk=vk, flags=KEYEVENTF_KEYUP)
+            time.sleep(0.015)
+        return {"ok": True, "keys": keys, "mode": self.mode_name}
+
+    def open_start_menu(self) -> Dict[str, Any]:
+        self.dispatch_key("lwin")
+        return {"ok": True, "mode": self.mode_name, "action": "open_start_menu"}
+
+    def show_desktop(self) -> Dict[str, Any]:
+        return self.dispatch_hotkey(["lwin", "d"])
+
+    def window_action(self, op: str, hwnd: Optional[int] = None, x: int = 100, y: int = 80, width: int = 960, height: int = 640) -> Dict[str, Any]:
+        if sys.platform != "win32":
+            return {"ok": True, "op": op}
+        user32 = ctypes.windll.user32
+        target = int(hwnd) if hwnd else int(user32.GetForegroundWindow())
+        if not target:
+            return {"ok": False, "error": "No target window found"}
+        if op == "close":
+            user32.PostMessageW(target, 0x0010, 0, 0)
+        elif op == "minimize":
+            user32.ShowWindow(target, 6)
+        elif op == "maximize":
+            user32.ShowWindow(target, 3)
+        elif op == "restore":
+            user32.ShowWindow(target, 9)
+        elif op == "focus":
+            user32.SetForegroundWindow(target)
+        elif op == "move_resize":
+            user32.MoveWindow(target, int(x), int(y), int(width), int(height), True)
+        return {"ok": True, "op": op, "hwnd": target, "mode": self.mode_name}
+
+    def clipboard_get(self) -> str:
+        if sys.platform != "win32":
+            return ""
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        if not user32.OpenClipboard(0):
+            return ""
+        try:
+            handle = user32.GetClipboardData(13)
+            if not handle:
+                return ""
+            ptr = kernel32.GlobalLock(handle)
+            if not ptr:
+                return ""
+            try:
+                return ctypes.wstring_at(ptr)
+            finally:
+                kernel32.GlobalUnlock(handle)
+        finally:
+            user32.CloseClipboard()
+
+    def clipboard_set(self, text: str) -> None:
+        if sys.platform != "win32":
+            return
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        if not user32.OpenClipboard(0):
+            return
+        try:
+            user32.EmptyClipboard()
+            data = (text + "\0").encode("utf-16-le")
+            hmem = kernel32.GlobalAlloc(0x0042, len(data))
+            ptr = kernel32.GlobalLock(hmem)
+            ctypes.memmove(ptr, data, len(data))
+            kernel32.GlobalUnlock(hmem)
+            user32.SetClipboardData(13, hmem)
+        finally:
+            user32.CloseClipboard()
+
+
 class SandboxTerminalEngine:
     """
     Executes commands, scripts, and multi-language code snippets strictly inside
@@ -1060,12 +1483,15 @@ class StreamConfig:
 
 
 class MohoDesktopAgentServer:
-    def __init__(self, host: str, port: int, token: str, allow_no_auth: bool = False, workspace: Optional[str] = None) -> None:
+    def __init__(self, host: str, port: int, token: str, allow_no_auth: bool = False, workspace: Optional[str] = None, mode: str = "auto") -> None:
         self.host = host
         self.port = port
         self.token = token
         self.allow_no_auth = allow_no_auth
-        self.desktop = HiddenDesktopEngine()
+        resolved_mode = mode.strip().lower()
+        if resolved_mode == "auto":
+            resolved_mode = "real-input" if is_windows_sandbox_env() else "hidden"
+        self.desktop = RealInputDesktopEngine() if resolved_mode == "real-input" else HiddenDesktopEngine()
         self.terminal = SandboxTerminalEngine(initial_workspace=workspace)
         self.clients: Dict[Any, StreamConfig] = {}
         _, self.os_label, self.win_build = check_windows_10_or_11()
@@ -1080,7 +1506,7 @@ class MohoDesktopAgentServer:
                 "version": AGENT_VERSION,
                 "os": self.os_label,
                 "windowsBuild": self.win_build,
-                "desktopMode": "hidden_win32_desktop",
+                "desktopMode": getattr(d, "mode_name", "hidden_win32_desktop"),
                 "virtualDesktopActive": d.active,
                 "emergencyStopped": d.emergency_stopped,
                 "screen": {"width": d.width, "height": d.height},
@@ -1119,7 +1545,7 @@ class MohoDesktopAgentServer:
         if action == "switch_virtual_desktop":
             return {
                 "ok": True,
-                "mode": "hidden_win32_desktop",
+                "mode": getattr(d, "mode_name", "hidden_win32_desktop"),
                 "desktopName": d.desktop_name,
                 "note": "Hidden isolated desktop runs in background; your primary Windows screen stays untouched.",
             }
@@ -1159,7 +1585,7 @@ class MohoDesktopAgentServer:
             cfg.quality = max(20, min(95, int(payload.get("quality", 70))))
             cfg.format = "png" if payload.get("format") == "png" else "jpeg"
             cfg.max_width = max(320, min(1920, int(payload.get("maxWidth", 1280))))
-            return {"ok": True, "streaming": True, "fps": cfg.fps, "mode": "hidden_win32_desktop"}
+            return {"ok": True, "streaming": True, "fps": cfg.fps, "mode": getattr(d, "mode_name", "hidden_win32_desktop")}
 
         if action == "stop_stream":
             cfg = self.clients.setdefault(ws, StreamConfig())
@@ -1361,13 +1787,40 @@ async def run_server(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     token = "" if args.no_auth else (args.token or secrets.token_urlsafe(24))
-    server_obj = MohoDesktopAgentServer(args.host, args.port, token, allow_no_auth=args.no_auth, workspace=args.workspace)
+    server_obj = MohoDesktopAgentServer(
+        args.host,
+        args.port,
+        token,
+        allow_no_auth=args.no_auth,
+        workspace=args.workspace,
+        mode=getattr(args, "mode", "auto"),
+    )
     session_path = save_session_file(args.port, token)
+    mode_name = getattr(server_obj.desktop, "mode_name", "hidden_win32_desktop")
+
+    if getattr(args, "announce_file", None):
+        announce_path = Path(args.announce_file)
+        announce_path.parent.mkdir(parents=True, exist_ok=True)
+        ip = detect_reachable_ipv4()
+        announce_path.write_text(
+            json.dumps(
+                {
+                    "ip": ip,
+                    "port": args.port,
+                    "wsUrl": f"ws://{ip}:{args.port}",
+                    "mode": mode_name,
+                    "version": AGENT_VERSION,
+                    "startedAt": int(time.time() * 1000),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     print("=" * 68)
-    print(f"  Moho Windows Hidden Desktop & Sandbox Terminal Agent v{AGENT_VERSION}")
+    print(f"  Moho Windows Desktop & Sandbox Terminal Agent v{AGENT_VERSION}")
     print(f"  OS: {server_obj.os_label}")
-    print(f"  Mode: TRUE Hidden Win32 Desktop (never switches your screen/mouse)")
+    print(f"  Mode: {mode_name}")
     print(f"  Endpoint: ws://{args.host}:{args.port}")
     print(f"  Auth Token: {token if token else '(disabled -- local dev mode)'}")
     print(f"  Session File: {session_path}")
@@ -1396,6 +1849,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--token", default="")
     parser.add_argument("--workspace", default=None, help="Initial project folder path for Sandbox Terminal")
+    parser.add_argument("--mode", choices=["auto", "real-input", "hidden"], default="auto", help="Desktop engine mode (auto selects real-input inside Windows Sandbox)")
+    parser.add_argument("--announce-file", default=None, help="Write reachable ws://<IP>:<port> JSON for Windows Sandbox host relay")
     parser.add_argument("--no-auth", action="store_true")
     args = parser.parse_args()
 

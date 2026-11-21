@@ -1,7 +1,7 @@
-# chromium-web-embed (`v6.2.0`)
+# chromium-web-embed (`v6.3.0`)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-6.2.0-emerald.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-6.3.0-emerald.svg)](package.json)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-MV3%20%2B%20Side%20Panel%20%2B%20WebMCP-sky.svg)](extension/manifest.json)
 [![Windows 10/11](https://img.shields.io/badge/Desktop%20Agent-Windows%2010%20%26%2011-indigo.svg)](desktop-agent/README.md)
 
@@ -10,6 +10,18 @@
 Built for **users**, **web developers**, and **all AI agents** — natively supporting **Google Gemini**, **Anthropic Claude**, **OpenAI / ChatGPT**, **Model Context Protocol (MCP)**, **Chrome WebMCP**, **MOHO AI**, and **any custom or open-source LLM/VLM** via universal structured tool calling.
 
 ---
+
+
+## Windows Sandbox Real-Desktop Mode (v6.3.0 — Recommended)
+
+> **Edition Requirement:** Full Windows Sandbox desktop isolation requires **Windows 10 (build 18342+) or Windows 11 — Pro, Enterprise, or Education** with hardware virtualization enabled. **Windows Home edition is not supported** by [Microsoft Windows Sandbox](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/). On Windows Home, use `start_agent.bat` (Browser Workspace + Local Folder Brain + Sandbox Terminal) or run `--mode real-input` inside VirtualBox/VMware.
+
+Run `desktop-agent\start_sandbox.bat` to launch a clean, disposable Windows 11 desktop with:
+- **100% Real Native Input (`SendInput` + `mss`):** Start Menu, Taskbar, Explorer, double-clicking icons/files, OLE drag-and-drop, window resizing/closing, and Arabic/English Unicode typing work identically to a physical PC — with **zero interference** to your host mouse, keyboard, or screen.
+- **Zero Setup Inside Sandbox:** Automatically maps your host Python + `.venv` read-only and starts a transparent local relay on `ws://127.0.0.1:47892`.
+- **One-Time Activation (Admin `cmd`):** `dism /online /Enable-Feature /FeatureName:Containers-DisposableClientVM /All` (restart PC).
+
+Full guide: [`docs/WINDOWS_SANDBOX_MODE.md`](./docs/WINDOWS_SANDBOX_MODE.md).
 
 ## Architecture Overview
 
