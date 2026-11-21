@@ -1,5 +1,5 @@
 const BRIDGE_CHANNEL = "real-browser-web/v5";
-const EXTENSION_VERSION = "5.1.0";
+const EXTENSION_VERSION = "5.1.1";
 const STORAGE_KEY = "managedBrowserWorkspaces";
 const DEFAULT_DESKTOP_URL = "ws://127.0.0.1:47892";
 
@@ -66,6 +66,8 @@ function desktopConnect(url = DEFAULT_DESKTOP_URL, token = "") {
         })
         .catch((err) => {
           settled = true;
+          try { ws.close(); } catch {}
+          desktopWs = null;
           reject(err);
         });
     };
@@ -213,6 +215,9 @@ async function ensureDebugger(tabId) {
     if (!msg.includes("Already attached")) throw err;
   }
   attachedDebuggerTabs.add(tabId);
+  try {
+    await chrome.debugger.sendCommand({ tabId }, "Emulation.setFocusEmulationEnabled", { enabled: true });
+  } catch {}
 }
 
 chrome.debugger.onDetach.addListener((source) => {
@@ -474,6 +479,7 @@ async function captureTabScreenshot(tabId, options = {}) {
   const format = options.format === "jpeg" ? "jpeg" : "png";
   const params = {
     format,
+    fromSurface: true,
     ...(format === "jpeg" && options.quality ? { quality: options.quality } : {}),
     ...(options.clip ? { clip: options.clip } : {}),
   };

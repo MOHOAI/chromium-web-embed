@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-AGENT_VERSION = "5.1.0"
+AGENT_VERSION = "5.1.1"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 47892
 MIN_WIN10_BUILD = 10240
@@ -724,9 +724,9 @@ class ScreenCapturer:
     def __init__(self) -> None:
         try:
             import mss  # type: ignore
-            self._mss = mss.mss()
+            self._mss_cls = getattr(mss, "MSS", mss.mss)
         except Exception:
-            self._mss = None
+            self._mss_cls = None
 
         try:
             from PIL import Image, ImageGrab  # type: ignore
@@ -747,19 +747,21 @@ class ScreenCapturer:
             raise RuntimeError("Pillow is required for screen capture. Run install_windows.ps1 first.")
 
         img = None
-        if self._mss is not None:
-            monitor = (
-                {
-                    "left": region[0],
-                    "top": region[1],
-                    "width": max(1, region[2] - region[0]),
-                    "height": max(1, region[3] - region[1]),
-                }
-                if region
-                else self._mss.monitors[1]
-            )
-            raw = self._mss.grab(monitor)
-            img = self._Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+        if self._mss_cls is not None:
+            # Create thread-local MSS context per capture to avoid Windows GDI _thread._local crash
+            with self._mss_cls() as sct:
+                monitor = (
+                    {
+                        "left": region[0],
+                        "top": region[1],
+                        "width": max(1, region[2] - region[0]),
+                        "height": max(1, region[3] - region[1]),
+                    }
+                    if region
+                    else sct.monitors[1]
+                )
+                raw = sct.grab(monitor)
+                img = self._Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
         elif self._ImageGrab is not None:
             img = self._ImageGrab.grab(bbox=region)
             if img.mode != "RGB":
@@ -1065,15 +1067,16 @@ class MohoDesktopAgentServer:
                         last_sig = sig
                         last_sent_at = now
                         await ws.send(json.dumps({"event": "desktop.frame", "data": frame}))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print(f"[STREAM ERROR] {exc}", file=sys.stderr)
                 elapsed = time.monotonic() - t0
                 delay = max(0.01, (1.0 / cfg.fps) - elapsed)
                 await asyncio.sleep(delay)
             else:
                 await asyncio.sleep(0.15)
 
-    async def handler(self, ws: Any) -> None:
+    async def handler(self, ws: Any, *_args: Any) -> None:
+        print("[CONNECT] Browser extension/client connected.")
         self.clients[ws] = StreamConfig()
         stream_task = asyncio.create_task(self._stream_loop(ws))
         try:
@@ -1090,6 +1093,7 @@ class MohoDesktopAgentServer:
                 client_token = msg.get("token") or payload.get("token")
 
                 if not self.allow_no_auth and self.token and client_token != self.token:
+                    print("[AUTH] Rejected request with invalid or missing token.")
                     await ws.send(
                         json.dumps(
                             {
@@ -1142,7 +1146,14 @@ async def run_server(args: argparse.Namespace) -> None:
     print("  Press Ctrl+C to stop.")
     print("=" * 64)
 
-    async with websockets.serve(server_obj.handler, args.host, args.port, max_size=16 * 1024 * 1024):
+    async with websockets.serve(
+        server_obj.handler,
+        args.host,
+        args.port,
+        max_size=16 * 1024 * 1024,
+        ping_interval=20,
+        ping_timeout=20,
+    ):
         await asyncio.Future()
 
 
