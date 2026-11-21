@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-AGENT_VERSION = "6.0.1"
+AGENT_VERSION = "6.1.0"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 47892
 MIN_WIN10_BUILD = 10240
@@ -127,6 +127,25 @@ if sys.platform == "win32":
     WM_KEYUP = 0x0101
     WM_CHAR = 0x0102
     WM_CLOSE = 0x0010
+    WM_ACTIVATE = 0x0006
+    WM_SETFOCUS = 0x0007
+    WM_NCHITTEST = 0x0084
+    WM_SYSCOMMAND = 0x0112
+    SC_MINIMIZE = 0xF020
+    SC_MAXIMIZE = 0xF030
+    SC_RESTORE = 0xF120
+    SC_CLOSE = 0xF060
+    HTCAPTION = 2
+    HTMINBUTTON = 8
+    HTMAXBUTTON = 9
+    HTCLOSE = 20
+    SWP_NOSIZE = 0x0001
+    SWP_NOZORDER = 0x0004
+    SW_MINIMIZE = 6
+    SW_MAXIMIZE = 3
+    SW_RESTORE = 9
+    SM_CXSCREEN = 0
+    SM_CYSCREEN = 1
 
     MK_LBUTTON = 0x0001
     MK_RBUTTON = 0x0002
@@ -233,6 +252,18 @@ if sys.platform == "win32":
     user32.ScreenToClient.restype = wintypes.BOOL
     user32.ChildWindowFromPointEx.argtypes = [wintypes.HWND, wintypes.POINT, wintypes.UINT]
     user32.ChildWindowFromPointEx.restype = wintypes.HWND
+    user32.RealChildWindowFromPoint.argtypes = [wintypes.HWND, wintypes.POINT]
+    user32.RealChildWindowFromPoint.restype = wintypes.HWND
+    user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    user32.SendMessageW.restype = ctypes.c_ssize_t
+    user32.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
+    user32.MapVirtualKeyW.restype = wintypes.UINT
+    user32.BringWindowToTop.argtypes = [wintypes.HWND]
+    user32.BringWindowToTop.restype = wintypes.BOOL
+    user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    user32.SetWindowPos.restype = wintypes.BOOL
+    user32.IsZoomed.argtypes = [wintypes.HWND]
+    user32.IsZoomed.restype = wintypes.BOOL
 
     VK_MAP: Dict[str, int] = {
         "backspace": 0x08, "tab": 0x09, "enter": 0x0D, "return": 0x0D,
@@ -266,9 +297,16 @@ class HiddenDesktopEngine:
     ever switching the user's screen or moving the user's physical mouse cursor.
     """
 
-    def __init__(self, width: int = 1280, height: int = 720) -> None:
-        self.width = width
-        self.height = height
+    def __init__(self, width: Optional[int] = None, height: Optional[int] = None) -> None:
+        if sys.platform == "win32":
+            rw = int(user32.GetSystemMetrics(SM_CXSCREEN)) or 1920
+            rh = int(user32.GetSystemMetrics(SM_CYSCREEN)) or 1080
+        else:
+            rw, rh = 1920, 1080
+        self.width = width or rw
+        self.height = height or rh
+        self._drag_window_hwnd: Optional[int] = None
+        self._drag_window_offset: Tuple[int, int] = (0, 0)
         self.desktop_name = HIDDEN_DESKTOP_NAME
         self.hdesk: Optional[int] = None
         self.active = False
@@ -521,33 +559,70 @@ class HiddenDesktopEngine:
         self.virtual_cursor = {"x": rx, "y": ry}
         return rx, ry
 
-    def _hit_test_target(self, x: int, y: int) -> Tuple[Optional[int], int, int]:
-        """Find top-most window & deepest child control at (x, y) inside the hidden desktop."""
+    def _hit_test_target(self, x: int, y: int) -> Tuple[Optional[int], Optional[int], int, int]:
+        """Find top-most window & recursively descend via RealChildWindowFromPoint to deepest control."""
         wins = self._enum_desktop_windows_internal()
         for winfo in wins:
             r = winfo["rect"]
             if r["x"] <= x < r["x"] + r["width"] and r["y"] <= y < r["y"] + r["height"]:
-                hwnd = winfo["hwnd"]
-                pt = wintypes.POINT(x, y)
-                user32.ScreenToClient(hwnd, ctypes.byref(pt))
-                child = user32.ChildWindowFromPointEx(hwnd, pt, 0x0001 | 0x0002)
-                if child and child != hwnd:
-                    pt2 = wintypes.POINT(x, y)
-                    user32.ScreenToClient(child, ctypes.byref(pt2))
-                    return int(child), int(pt2.x), int(pt2.y)
-                return hwnd, int(pt.x), int(pt.y)
-        return self._focused_hwnd, x, y
+                top_hwnd = winfo["hwnd"]
+                cur = top_hwnd
+                for _ in range(8):
+                    pt = wintypes.POINT(x, y)
+                    user32.ScreenToClient(cur, ctypes.byref(pt))
+                    nxt = user32.RealChildWindowFromPoint(cur, pt)
+                    if not nxt or nxt == cur:
+                        return top_hwnd, int(cur), int(pt.x), int(pt.y)
+                    cur = int(nxt)
+                pt_f = wintypes.POINT(x, y)
+                user32.ScreenToClient(cur, ctypes.byref(pt_f))
+                return top_hwnd, int(cur), int(pt_f.x), int(pt_f.y)
+        return self._focused_hwnd, self._focused_hwnd, x, y
 
     def dispatch_mouse(self, action: str, x: int, y: int, button: str = "left", delta_x: int = 0, delta_y: int = 0) -> Dict[str, Any]:
         if self.emergency_stopped:
             raise RuntimeError("Agent halted by Emergency Kill Switch.")
 
         def _do():
-            hwnd, cx, cy = self._hit_test_target(x, y)
-            if not hwnd:
+            # Active title-bar window drag in progress
+            if action == "move" and self._drag_window_hwnd:
+                nx = x - self._drag_window_offset[0]
+                ny = y - self._drag_window_offset[1]
+                user32.SetWindowPos(self._drag_window_hwnd, 0, nx, ny, 0, 0, SWP_NOSIZE | SWP_NOZORDER)
+                return {"ok": True, "hwnd": self._drag_window_hwnd, "draggedTo": {"x": nx, "y": ny}}
+            if action == "mouse_up" and self._drag_window_hwnd:
+                hw = self._drag_window_hwnd
+                self._drag_window_hwnd = None
+                return {"ok": True, "hwnd": hw, "cursor": {"x": x, "y": y}}
+
+            top_hwnd, hwnd, cx, cy = self._hit_test_target(x, y)
+            if not hwnd or not top_hwnd:
                 return {"ok": True, "cursor": {"x": x, "y": y}, "note": "No window under point"}
             self._focused_hwnd = hwnd
             lp = _make_lparam(cx, cy)
+
+            # Check non-client hit test (title bar / close / max / min buttons) on left button actions
+            if button == "left" and action in ("mouse_down", "click", "double_click"):
+                user32.BringWindowToTop(top_hwnd)
+                user32.PostMessageW(top_hwnd, WM_ACTIVATE, 2, 0)  # WA_CLICKACTIVE
+                user32.PostMessageW(hwnd, WM_SETFOCUS, 0, 0)
+                ht = int(user32.SendMessageW(top_hwnd, WM_NCHITTEST, 0, _make_lparam(x, y)))
+                if ht == HTCLOSE:
+                    user32.PostMessageW(top_hwnd, WM_SYSCOMMAND, SC_CLOSE, 0)
+                    return {"ok": True, "hwnd": top_hwnd, "ncAction": "close"}
+                if ht == HTMAXBUTTON:
+                    cmd = SC_RESTORE if user32.IsZoomed(top_hwnd) else SC_MAXIMIZE
+                    user32.PostMessageW(top_hwnd, WM_SYSCOMMAND, cmd, 0)
+                    return {"ok": True, "hwnd": top_hwnd, "ncAction": "toggle_maximize"}
+                if ht == HTMINBUTTON:
+                    user32.PostMessageW(top_hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0)
+                    return {"ok": True, "hwnd": top_hwnd, "ncAction": "minimize"}
+                if ht == HTCAPTION and action == "mouse_down":
+                    rect = wintypes.RECT()
+                    user32.GetWindowRect(top_hwnd, ctypes.byref(rect))
+                    self._drag_window_hwnd = top_hwnd
+                    self._drag_window_offset = (x - int(rect.left), y - int(rect.top))
+                    return {"ok": True, "hwnd": top_hwnd, "ncAction": "start_drag_window"}
 
             if action == "move":
                 user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lp)
@@ -578,7 +653,7 @@ class HiddenDesktopEngine:
                 if delta_x:
                     wp = (int(delta_x) & 0xFFFF) << 16
                     user32.PostMessageW(hwnd, WM_MOUSEHWHEEL, wp, _make_lparam(x, y))
-            return {"ok": True, "hwnd": hwnd, "cursor": {"x": x, "y": y}}
+            return {"ok": True, "hwnd": hwnd, "topHwnd": top_hwnd, "cursor": {"x": x, "y": y}}
 
         return self._run_on_desktop_thread(_do)
 
@@ -633,10 +708,35 @@ class HiddenDesktopEngine:
                     hwnd = wins[0]["hwnd"]
             if not hwnd:
                 return {"ok": False, "error": "No target window on hidden desktop."}
-            user32.PostMessageW(hwnd, WM_KEYDOWN, vk, 0)
-            user32.PostMessageW(hwnd, WM_KEYUP, vk, 0)
-            return {"ok": True, "hwnd": hwnd, "vk": vk}
+            scan = int(user32.MapVirtualKeyW(vk, 0)) & 0xFF
+            lp_down = 1 | (scan << 16)
+            lp_up = 1 | (scan << 16) | (1 << 30) | (1 << 31)
+            user32.PostMessageW(hwnd, WM_KEYDOWN, vk, lp_down)
+            user32.PostMessageW(hwnd, WM_KEYUP, vk, lp_up)
+            return {"ok": True, "hwnd": hwnd, "vk": vk, "scan": scan}
 
+        return self._run_on_desktop_thread(_do)
+
+    def window_action(self, op: str, hwnd: Optional[int] = None, x: int = 100, y: int = 80, width: int = 960, height: int = 640) -> Dict[str, Any]:
+        def _do():
+            target = hwnd or self._focused_hwnd
+            if not target:
+                wins = self._enum_desktop_windows_internal()
+                if wins:
+                    target = wins[0]["hwnd"]
+            if not target:
+                return {"ok": False, "error": "No window available on hidden desktop."}
+            if op == "close":
+                user32.PostMessageW(target, WM_SYSCOMMAND, SC_CLOSE, 0)
+            elif op == "maximize":
+                user32.ShowWindow(target, SW_MAXIMIZE)
+            elif op == "minimize":
+                user32.ShowWindow(target, SW_MINIMIZE)
+            elif op == "restore":
+                user32.ShowWindow(target, SW_RESTORE)
+            elif op == "move_resize":
+                user32.SetWindowPos(target, 0, int(x), int(y), int(width), int(height), SWP_NOZORDER)
+            return {"ok": True, "hwnd": int(target), "op": op}
         return self._run_on_desktop_thread(_do)
 
 
@@ -910,6 +1010,28 @@ class MohoDesktopAgentServer:
         if action == "inspect_window_controls":
             wins = d.list_windows()
             return {"hwnd": wins[0]["hwnd"] if wins else 0, "windows": wins, "controls": wins[: int(payload.get("maxControls", 60))]}
+
+        if action == "window_action":
+            return d.window_action(
+                op=str(payload.get("op", "restore")),
+                hwnd=payload.get("hwnd"),
+                x=int(payload.get("x", 100)),
+                y=int(payload.get("y", 80)),
+                width=int(payload.get("width", 960)),
+                height=int(payload.get("height", 640)),
+            )
+
+        if action == "observe_rich":
+            frame = await asyncio.to_thread(
+                d.capture_frame, str(payload.get("format", "jpeg")), int(payload.get("quality", 75)), payload.get("maxWidth", 1280)
+            )
+            wins = d.list_windows()
+            return {
+                "screenshot": frame,
+                "windows": wins,
+                "cursor": d.virtual_cursor,
+                "screen": {"width": d.width, "height": d.height},
+            }
 
         if action == "start_stream":
             if not d.active:

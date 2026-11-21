@@ -1,6 +1,6 @@
 {
   "name": "chromium-web-embed",
-  "version": "6.0.1",
+  "version": "6.1.0",
   "description": "Real Chromium browser workspace embedding, Windows 10/11 Virtual Desktop Computer-Use agent with live screen preview, Local Folder Brain (File System Access API), MCP tools, and multi-provider AI runtime (Gemini, Claude, OpenAI/ChatGPT, MOHO AI) powered by a Chrome MV3 extension.",
   "license": "MIT",
   "type": "module",

@@ -173,6 +173,39 @@ export function getDesktopToolSpecs(): UnifiedToolSpec[] {
         },
       },
     },
+    {
+      name: "desktop_launch_app",
+      description: "Launch any Windows 10/11 application directly inside the hidden isolated desktop (e.g. explorer.exe, notepad.exe, cmd.exe, calc.exe, msedge.exe, chrome.exe).",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string" },
+          args: { type: "array", items: { type: "string" } },
+        },
+        required: ["command"],
+      },
+    },
+    {
+      name: "desktop_window_action",
+      description: "Manage a window inside the hidden isolated desktop: close, maximize, minimize, restore, or move_resize.",
+      parameters: {
+        type: "object",
+        properties: {
+          op: { type: "string", enum: ["close", "maximize", "minimize", "restore", "move_resize"] },
+          hwnd: { type: "number" },
+          x: { type: "number" },
+          y: { type: "number" },
+          width: { type: "number" },
+          height: { type: "number" },
+        },
+        required: ["op"],
+      },
+    },
+    {
+      name: "desktop_observe_rich",
+      description: "Capture both a live screenshot and the structured list of all visible windows + cursor coordinates inside the hidden desktop in one call.",
+      parameters: { type: "object", properties: {} },
+    },
   ];
 }
 
@@ -498,6 +531,15 @@ export class UnifiedAIToolExecutor {
             hwnd: typeof args.hwnd === "number" ? args.hwnd : undefined,
             maxControls: typeof args.maxControls === "number" ? args.maxControls : undefined,
           });
+        case "desktop_launch_app":
+          return this.desktopAgent.launchApp(
+            String(args.command ?? ""),
+            Array.isArray(args.args) ? args.args.map(String) : undefined
+          );
+        case "desktop_window_action":
+          return this.desktopAgent.executeComputerAction({ type: "window_action", ...args });
+        case "desktop_observe_rich":
+          return this.desktopAgent.executeComputerAction({ type: "observe_rich" });
         case "desktop_focus_window":
           return this.desktopAgent.focusWindow({
             titleContains: args.titleContains ? String(args.titleContains) : undefined,
