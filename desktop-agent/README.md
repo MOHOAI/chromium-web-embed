@@ -1,28 +1,18 @@
-# Moho Windows 10/11 Desktop & Sandbox Agent (v6.3.0)
+# Moho Windows 10/11 Desktop & Sandbox Agent (v7.0.2)
 
-Local Windows agent powering **Live Isolated Desktop Computer-Use** and the **Jailed Sandbox Terminal** for `chromium-web-embed`.
+Local Windows agent powering **Silent Persistent Windows Sandbox Computer-Use**, **One-Click Web Launch (`moho-agent://`)**, **Auto-Token Extension Handshake**, and the **Jailed Sandbox Terminal** for `chromium-web-embed`.
 
-## Choose Your Desktop Mode
+## Fastest Setup for End Users (Zero Coding)
+1. Double-click **`Moho-OneClick-Installer.bat`** (or **`setup_one_click.bat`** if you already cloned the repo).
+2. It automatically checks/installs Python (via `winget`), creates `.venv` and `%USERPROFILE%\MohoSandboxData`, registers `moho-agent://` (no Admin needed), and launches silently.
+3. Click **Launch Isolated Computer** in your web app — authentication and live streaming start automatically!
+
+## Available Modes
 
 | Mode | Command | Requirement | Capabilities |
 | :--- | :--- | :--- | :--- |
-| **Windows Sandbox Real-Desktop (Recommended)** | `start_sandbox.bat` | **Windows 10/11 Pro, Enterprise, or Education** (NOT Home) + Virtualization enabled | **100% full real Windows desktop** (`SendInput` + `mss`): Start Menu, Taskbar, Drag & Drop, modern Windows 11 apps, Explorer — zero host mouse/screen interference. |
-| **Hidden Win32 Desktop + Sandbox Terminal** | `start_agent.bat` | Any Windows 10/11 (including Home) | Lightweight background Win32 desktop (`CreateDesktopW`) + full Jailed Sandbox Terminal (Python/Node/CMD/PowerShell). |
-| **Custom VM / Direct Real-Input** | `start_agent.bat --mode real-input --host 0.0.0.0` | Inside VirtualBox / Hyper-V / VMware guest | Full `SendInput` + `mss` inside any Windows VM. |
+| **Silent Persistent Windows Sandbox (Recommended)** | `moho-agent://start-sandbox` or `start_sandbox.bat` | **Windows 10/11 Pro, Enterprise, or Education** (NOT Home) | **100% full real Windows desktop** (`SendInput` + `mss`), stealth-hidden in background, persistent files & browser logins (`MohoSandboxData`), Single-Instance Guard, auto-token auth (`127.0.0.1:47893`). |
+| **Visible Windows Sandbox (Developer Debug)** | `start_sandbox.bat --visible` | Windows 10/11 Pro/Enterprise/Education | Same as above with Sandbox window kept visible. |
+| **Hidden Win32 Desktop + Sandbox Terminal** | `start_agent.bat` | Any Windows 10/11 (including Home) | Lightweight background desktop + full Jailed Sandbox Terminal. |
 
-## Quick Start (Windows 11 Pro / Enterprise / Education)
-
-1. **Enable Windows Sandbox (one-time, Administrator `cmd`):**
-   ```cmd
-   dism /online /Enable-Feature /FeatureName:Containers-DisposableClientVM /All
-   ```
-   Restart Windows when prompted.
-
-2. **Launch Full Isolated Sandbox Desktop + Host Relay:**
-   ```cmd
-   cd /d desktop-agent
-   start_sandbox.bat
-   ```
-   Wait until `[READY] Host Relay active on ws://127.0.0.1:47892` appears, copy the Auth Token, and connect from your web app or Chrome extension.
-
-See [`docs/WINDOWS_SANDBOX_MODE.md`](../docs/WINDOWS_SANDBOX_MODE.md) for full configuration options (`--memory-mb`, `--workspace`, `--no-vgpu`, firewall notes).
+See [`docs/WINDOWS_SANDBOX_MODE.md`](../docs/WINDOWS_SANDBOX_MODE.md) and [`docs/troubleshooting.md`](../docs/troubleshooting.md) for full details.

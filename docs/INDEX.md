@@ -1,4 +1,4 @@
-# Documentation Index — `chromium-web-embed` (v7.0.0)
+# Documentation Index — `chromium-web-embed` (v7.0.2)
 
 ## Quick Start & End-User Guides
 - **[Main README (Overview, Downloads & Quick Start)](../README.md)** — Official overview of the library, direct download links, and 1-click setup.
