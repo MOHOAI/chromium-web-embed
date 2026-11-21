@@ -1,6 +1,6 @@
-export const BRIDGE_CHANNEL = "real-browser-web/v4" as const;
-export const LEGACY_BRIDGE_CHANNELS = ["real-browser-web/v3"] as const;
-export const BRIDGE_VERSION = 4 as const;
+export const BRIDGE_CHANNEL = "real-browser-web/v5" as const;
+export const LEGACY_BRIDGE_CHANNELS = ["real-browser-web/v4", "real-browser-web/v3"] as const;
+export const BRIDGE_VERSION = 5 as const;
 
 export const TAB_ACTIONS = [
   "status",
@@ -33,13 +33,27 @@ export const TAB_ACTIONS = [
   "workspaceWaitForSelector",
   "workspaceStorage",
   "agentExecute",
+  // v5.0 Windows 10/11 Desktop Computer-Use Agent bridge actions
+  "desktopConnect",
+  "desktopDisconnect",
+  "desktopStatus",
+  "desktopExecute",
+  "desktopStartStream",
+  "desktopStopStream",
+  "desktopEmergencyStop",
+  "desktopResume",
+  // v5.0 Local Folder Brain telemetry/sync actions
+  "folderBrainSyncStatus",
+  "workspaceAriaSnapshot",
+  "workspaceAnnotatedScreenshot",
+  "workspaceDiagnostics",
 ] as const;
 
 export type TabAction = (typeof TAB_ACTIONS)[number];
 
 export type CoordinateSpace = "normalized_1000" | "pixels";
-export type MouseButton = "left" | "right" | "middle";
-export type ModifierKey = "shift" | "ctrl" | "alt" | "meta" | "super";
+export type MouseButton = "left" | "right" | "middle" | "x1" | "x2";
+export type ModifierKey = "shift" | "ctrl" | "alt" | "meta" | "super" | "win";
 export type ScrollDirection = "up" | "down" | "left" | "right";
 export type ComputerUseEnvironment = "browser" | "mobile" | "desktop";
 export type BrowserWindowMode = "normal" | "maximized" | "minimized" | "fullscreen";
@@ -108,6 +122,40 @@ export interface InteractiveDomElement {
   checked?: boolean;
 }
 
+export interface DesktopScreenFrame {
+  format: "png" | "jpeg";
+  mimeType: "image/png" | "image/jpeg";
+  base64: string;
+  dataUrl: string;
+  width: number;
+  height: number;
+  screenWidth: number;
+  screenHeight: number;
+  capturedAt: number;
+}
+
+export interface DesktopAgentStatus {
+  connected: boolean;
+  version?: string;
+  os?: string;
+  windowsBuild?: number;
+  virtualDesktopActive?: boolean;
+  virtualDesktopCount?: number;
+  emergencyStopped?: boolean;
+  streaming?: boolean;
+  endpoint?: string;
+  screen?: {
+    width: number;
+    height: number;
+    virtualLeft: number;
+    virtualTop: number;
+    virtualWidth: number;
+    virtualHeight: number;
+  };
+  cursor?: { x: number; y: number };
+  error?: string;
+}
+
 export interface BrowserEvent {
   type:
     | "workspace.created"
@@ -118,7 +166,12 @@ export interface BrowserEvent {
     | "tab.activated"
     | "tab.removed"
     | "agent.action"
-    | "agent.safety_prompt";
+    | "agent.safety_prompt"
+    | "desktop.connected"
+    | "desktop.disconnected"
+    | "desktop.frame"
+    | "desktop.emergency_stop"
+    | "folder_brain.updated";
   workspaceId: string;
   tabId?: number;
   payload?: Record<string, unknown>;
@@ -166,9 +219,22 @@ export interface SharedTabInput {
 
 export type UnifiedComputerAction =
   | {
-      type: "click" | "double_click" | "triple_click" | "middle_click" | "right_click" | "mouse_down" | "mouse_up" | "move";
+      type:
+        | "click"
+        | "double_click"
+        | "triple_click"
+        | "middle_click"
+        | "right_click"
+        | "x1_click"
+        | "x2_click"
+        | "mouse_down"
+        | "mouse_up"
+        | "move";
       x?: number;
       y?: number;
+      button?: MouseButton;
+      smooth?: boolean;
+      steps?: number;
       coordinateSpace?: CoordinateSpace;
       modifiers?: ModifierKey[];
       intent?: string;
@@ -178,6 +244,7 @@ export type UnifiedComputerAction =
       x: number;
       y: number;
       seconds?: number;
+      button?: MouseButton;
       coordinateSpace?: CoordinateSpace;
       intent?: string;
     }
@@ -198,6 +265,8 @@ export type UnifiedComputerAction =
       endX: number;
       endY: number;
       path?: Array<{ x: number; y: number }>;
+      button?: MouseButton;
+      steps?: number;
       coordinateSpace?: CoordinateSpace;
       modifiers?: ModifierKey[];
       intent?: string;
@@ -320,6 +389,7 @@ export interface ExtensionStatus {
   bridgeVersion: number;
   channel: string;
   capabilities: string[];
+  desktopAgentConnected?: boolean;
 }
 
 export interface BridgeCommand {

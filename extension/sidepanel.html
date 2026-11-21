@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Moho AI Side Panel</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
+      background: #090e1a;
+      color: #f8fafc;
+      padding: 14px;
+      line-height: 1.45;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #1e293b;
+    }
+    .title { font-size: 15px; font-weight: 700; color: #38bdf8; }
+    .ver { font-size: 11px; background: #1e293b; color: #7dd3fc; padding: 2px 8px; border-radius: 999px; }
+    .card {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .card h2 {
+      font-size: 13px;
+      color: #e2e8f0;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 6px; font-weight: 600; }
+    .ok { background: #064e3b; color: #34d399; }
+    .warn { background: #78350f; color: #fbbf24; }
+    .err { background: #7f1d1d; color: #fca5a5; }
+    .off { background: #334155; color: #cbd5e1; }
+    .preview {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #020617;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #64748b;
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+    .preview img { width: 100%; height: 100%; object-fit: contain; }
+    .row { display: flex; gap: 6px; margin-top: 6px; }
+    input {
+      flex: 1;
+      background: #0b1120;
+      border: 1px solid #334155;
+      border-radius: 7px;
+      color: #f8fafc;
+      padding: 7px 8px;
+      font-size: 12px;
+      direction: ltr;
+    }
+    button {
+      flex: 1;
+      border: none;
+      border-radius: 7px;
+      padding: 7px 8px;
+      font-size: 11.5px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .b-blue { background: #0284c7; color: #fff; }
+    .b-green { background: #059669; color: #fff; }
+    .b-red { background: #dc2626; color: #fff; }
+    .b-slate { background: #334155; color: #f8fafc; }
+    .meta { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+    pre {
+      background: #020617;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 8px;
+      font-size: 11px;
+      max-height: 150px;
+      overflow: auto;
+      direction: ltr;
+      color: #cbd5e1;
+      margin-top: 6px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="title">✦ Moho AI Companion Panel</span>
+    <span id="sp-ver" class="ver">v5.1.0</span>
+  </div>
+
+  <!-- Live Windows 10/11 Virtual Desktop Preview -->
+  <div class="card">
+    <h2>
+      <span>🖥️ سطح المكتب الافتراضي (Windows 10/11)</span>
+      <span id="sp-desktop-badge" class="badge off">غير متصل</span>
+    </h2>
+    <div id="sp-preview" class="preview">اضغط اتصال لبدء المعاينة الحية للشاشة</div>
+    <div class="row">
+      <input id="sp-token" type="password" placeholder="Desktop Agent Auth Token" />
+    </div>
+    <div class="row">
+      <button id="sp-connect" class="b-green">اتصال + بث</button>
+      <button id="sp-new-vd" class="b-blue" disabled>سطح مكتب فارغ</button>
+      <button id="sp-kill" class="b-red" disabled>إيقاف طارئ</button>
+    </div>
+    <div id="sp-desktop-meta" class="meta">وسيط ويندوز يعمل محليًا على ws://127.0.0.1:47892</div>
+  </div>
+
+  <!-- Active Tab ARIA / SoM / Diagnostics Inspector -->
+  <div class="card">
+    <h2>
+      <span>🔍 فحص التبويب (ARIA / Console)</span>
+      <span id="sp-tab-badge" class="badge off">جاهز</span>
+    </h2>
+    <div class="row">
+      <button id="sp-refresh-aria" class="b-blue">لقطة ARIA</button>
+      <button id="sp-refresh-diag" class="b-slate">أخطاء Console</button>
+    </div>
+    <pre id="sp-output">اضغط على أحد الأزرار لعرض شجرة الوصول (ARIA) أو أخطاء الصفحة الحية...</pre>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 (() => {
-  const BRIDGE_CHANNEL = "real-browser-web/v4";
-  const LEGACY_CHANNELS = ["real-browser-web/v3"];
+  const BRIDGE_CHANNEL = "real-browser-web/v5";
+  const LEGACY_CHANNELS = ["real-browser-web/v4", "real-browser-web/v3"];
   const TAB_ACTIONS = new Set([
     "status",
     "subscribe",
@@ -31,7 +31,19 @@
     "workspacePrintPdf",
     "workspaceWaitForSelector",
     "workspaceStorage",
-    "agentExecute"
+    "agentExecute",
+    "desktopConnect",
+    "desktopDisconnect",
+    "desktopStatus",
+    "desktopExecute",
+    "desktopStartStream",
+    "desktopStopStream",
+    "desktopEmergencyStop",
+    "desktopResume",
+    "folderBrainSyncStatus",
+    "workspaceAriaSnapshot",
+    "workspaceAnnotatedScreenshot",
+    "workspaceDiagnostics"
   ]);
 
   if (globalThis.__realBrowserWebBridgeInstalled) return;

@@ -1,7 +1,9 @@
 import {
   BRIDGE_CHANNEL,
   BRIDGE_VERSION,
+  LEGACY_BRIDGE_CHANNELS,
   type AgentExecutionResult,
+  type DesktopAgentStatus,
   type AgentOperation,
   type BrowserEvent,
   type BrowserTab,
@@ -28,6 +30,9 @@ export * from "./agent-control-policy.js";
 export * from "./safety-policy.js";
 export * from "./providers/index.js";
 export * from "./agent-runner.js";
+export * from "./desktop-agent.js";
+export * from "./local-folder-brain.js";
+export * from "./webmcp.js";
 
 export interface RealBrowserClientOptions {
   timeoutMs?: number;
@@ -100,7 +105,7 @@ export class RealBrowserClient {
         return;
       }
       const msg = event.data as Record<string, unknown>;
-      if (msg.channel !== BRIDGE_CHANNEL && msg.channel !== "real-browser-web/v3") {
+      if (msg.channel !== BRIDGE_CHANNEL && !(LEGACY_BRIDGE_CHANNELS as readonly string[]).includes(String(msg.channel))) {
         return;
       }
       if (msg.event && typeof msg.event === "object") {
@@ -393,6 +398,86 @@ export class RealBrowserClient {
     );
   }
 
+  // --- v5.0 Windows 10/11 Desktop Computer-Use Agent Bridge Methods ---
+  async desktopConnect(options?: { url?: string; token?: string }): Promise<DesktopAgentStatus> {
+    return this.request<DesktopAgentStatus>("desktopConnect", options ?? {});
+  }
+
+  async desktopDisconnect(): Promise<{ ok: boolean }> {
+    return this.request<{ ok: boolean }>("desktopDisconnect");
+  }
+
+  async desktopStatus(): Promise<DesktopAgentStatus> {
+    return this.request<DesktopAgentStatus>("desktopStatus");
+  }
+
+  async desktopExecute(
+    action: string,
+    payload: Record<string, unknown> = {}
+  ): Promise<unknown> {
+    return this.request("desktopExecute", { action, payload });
+  }
+
+  async desktopStartStream(options?: {
+    fps?: number;
+    quality?: number;
+    format?: "jpeg" | "png";
+    maxWidth?: number;
+  }): Promise<{ ok: boolean; streaming: boolean }> {
+    return this.request<{ ok: boolean; streaming: boolean }>(
+      "desktopStartStream",
+      options ?? {}
+    );
+  }
+
+  async desktopStopStream(): Promise<{ ok: boolean; streaming: boolean }> {
+    return this.request<{ ok: boolean; streaming: boolean }>("desktopStopStream");
+  }
+
+  async desktopEmergencyStop(
+    closeVirtualDesktop = false
+  ): Promise<{ ok: boolean; emergencyStopped: boolean }> {
+    return this.request<{ ok: boolean; emergencyStopped: boolean }>(
+      "desktopEmergencyStop",
+      { closeVirtualDesktop }
+    );
+  }
+
+  async desktopResume(): Promise<{ ok: boolean; emergencyStopped: boolean }> {
+    return this.request<{ ok: boolean; emergencyStopped: boolean }>("desktopResume");
+  }
+
+  // --- v5.0 Local Folder Brain Status Sync ---
+  async syncFolderBrainStatus(status: {
+    connected: boolean;
+    folderName: string | null;
+    indexedFileCount: number;
+  }): Promise<{ ok: boolean }> {
+    return this.request<{ ok: boolean }>("folderBrainSyncStatus", status);
+  }
+
+  // --- v5.1 ARIA Snapshot, Set-of-Mark (SoM) & Console/Network Diagnostics ---
+  async getAriaSnapshot(tabId?: number): Promise<{
+    yaml: string;
+    refs: Array<{ ref: string; role: string; name: string; normalizedCenter: { x: number; y: number } }>;
+  }> {
+    return this.request("workspaceAriaSnapshot", { tabId });
+  }
+
+  async captureAnnotatedScreenshot(tabId?: number): Promise<{
+    screenshot: SharedTabScreenshot;
+    elements: InteractiveDomElement[];
+  }> {
+    return this.request("workspaceAnnotatedScreenshot", { tabId });
+  }
+
+  async getDiagnostics(tabId?: number): Promise<{
+    consoleErrors: Array<{ level: string; text: string; timestamp: number }>;
+    networkErrors: Array<{ url: string; status: number; statusText: string; timestamp: number }>;
+  }> {
+    return this.request("workspaceDiagnostics", { tabId });
+  }
+
   async getConnectionDiagnostic(): Promise<ConnectionDiagnostic> {
     const ctx = getEmbeddedApplicationContext();
     try {
@@ -522,11 +607,25 @@ export class SharedTabViewer {
     if (!this.lastShot) return null;
     const rect = this.img.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
-    const scaleX = this.lastShot.width / rect.width;
-    const scaleY = this.lastShot.height / rect.height;
+    const imgAspect = this.lastShot.width / Math.max(1, this.lastShot.height);
+    const boxAspect = rect.width / rect.height;
+    let renderW = rect.width;
+    let renderH = rect.height;
+    let offsetX = 0;
+    let offsetY = 0;
+    if (imgAspect > boxAspect) {
+      renderH = rect.width / imgAspect;
+      offsetY = (rect.height - renderH) / 2;
+    } else {
+      renderW = rect.height * imgAspect;
+      offsetX = (rect.width - renderW) / 2;
+    }
+    const relX = (e.clientX - rect.left - offsetX) / renderW;
+    const relY = (e.clientY - rect.top - offsetY) / renderH;
+    if (relX < 0 || relX > 1 || relY < 0 || relY > 1) return null;
     return {
-      x: Math.round((e.clientX - rect.left) * scaleX),
-      y: Math.round((e.clientY - rect.top) * scaleY),
+      x: Math.round(relX * this.lastShot.width),
+      y: Math.round(relY * this.lastShot.height),
     };
   }
 
@@ -737,6 +836,18 @@ export class ManagedBrowserAgent {
 
   async getPageText(tabId?: number): Promise<{ title: string; url: string; text: string }> {
     return this.client.getPageText(tabId);
+  }
+
+  async getAriaSnapshot(tabId?: number) {
+    return this.client.getAriaSnapshot(tabId);
+  }
+
+  async captureAnnotatedScreenshot(tabId?: number) {
+    return this.client.captureAnnotatedScreenshot(tabId);
+  }
+
+  async getDiagnostics(tabId?: number) {
+    return this.client.getDiagnostics(tabId);
   }
 
   async waitForSelector(

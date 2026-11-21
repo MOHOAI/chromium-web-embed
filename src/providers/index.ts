@@ -4,6 +4,7 @@ export * from "./anthropic.js";
 export * from "./openai.js";
 export * from "./generic.js";
 export * from "./mcp.js";
+export * from "./ai-toolkit.js";
 
 import { AnthropicComputerUseAdapter } from "./anthropic.js";
 import { GeminiComputerUseAdapter } from "./gemini.js";

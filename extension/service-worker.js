@@ -1,12 +1,132 @@
-const BRIDGE_CHANNEL = "real-browser-web/v4";
-const EXTENSION_VERSION = "4.2.0";
+const BRIDGE_CHANNEL = "real-browser-web/v5";
+const EXTENSION_VERSION = "5.1.0";
 const STORAGE_KEY = "managedBrowserWorkspaces";
+const DEFAULT_DESKTOP_URL = "ws://127.0.0.1:47892";
 
 const workspaces = new Map();
 const subscribers = new Set();
 const attachedDebuggerTabs = new Set();
 const cursorByTab = new Map();
+const folderBrainByOrigin = new Map();
 let restoredOnce = false;
+
+// --- v5.0 Windows 10/11 Desktop Computer-Use Agent WebSocket Broker ---
+let desktopWs = null;
+let desktopEndpoint = DEFAULT_DESKTOP_URL;
+let desktopToken = "";
+let desktopKeepAliveTimer = null;
+const desktopPending = new Map();
+const diagnosticsByTab = new Map();
+
+function stopDesktopKeepAlive() {
+  if (desktopKeepAliveTimer) {
+    clearInterval(desktopKeepAliveTimer);
+    desktopKeepAliveTimer = null;
+  }
+}
+
+function startDesktopKeepAlive() {
+  stopDesktopKeepAlive();
+  // Chrome MV3 WebSocket best practice: exchange a message every 20s (<30s SW idle timeout)
+  desktopKeepAliveTimer = setInterval(() => {
+    if (desktopWs && desktopWs.readyState === WebSocket.OPEN) {
+      desktopCall("ping", {}, 5000).catch(() => {});
+    } else {
+      stopDesktopKeepAlive();
+    }
+  }, 20000);
+}
+
+function desktopConnect(url = DEFAULT_DESKTOP_URL, token = "") {
+  desktopEndpoint = url || DEFAULT_DESKTOP_URL;
+  desktopToken = token || "";
+  if (desktopWs && desktopWs.readyState === WebSocket.OPEN) {
+    return desktopCall("status");
+  }
+  if (desktopWs) {
+    try { desktopWs.close(); } catch {}
+    desktopWs = null;
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const ws = new WebSocket(desktopEndpoint);
+    ws.onopen = () => {
+      desktopWs = ws;
+      startDesktopKeepAlive();
+      broadcastEvent({
+        type: "desktop.connected",
+        workspaceId: "desktop",
+        payload: { endpoint: desktopEndpoint },
+        timestamp: Date.now(),
+      });
+      desktopCall("status")
+        .then((st) => {
+          settled = true;
+          resolve({ ...st, connected: true, endpoint: desktopEndpoint });
+        })
+        .catch((err) => {
+          settled = true;
+          reject(err);
+        });
+    };
+    ws.onerror = () => {
+      if (!settled) {
+        settled = true;
+        reject(new Error(`Unable to connect to Moho Windows Desktop Agent at ${desktopEndpoint}. Start desktop-agent/start_agent.bat first.`));
+      }
+    };
+    ws.onclose = () => {
+      stopDesktopKeepAlive();
+      desktopWs = null;
+      for (const p of desktopPending.values()) {
+        clearTimeout(p.timer);
+        p.reject(new Error("Windows Desktop Agent disconnected."));
+      }
+      desktopPending.clear();
+      broadcastEvent({
+        type: "desktop.disconnected",
+        workspaceId: "desktop",
+        timestamp: Date.now(),
+      });
+    };
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(String(ev.data));
+        if (msg.event === "desktop.frame" && msg.data) {
+          broadcastEvent({
+            type: "desktop.frame",
+            workspaceId: "desktop",
+            payload: msg.data,
+            timestamp: Date.now(),
+          });
+          return;
+        }
+        if (msg.id && desktopPending.has(msg.id)) {
+          const entry = desktopPending.get(msg.id);
+          desktopPending.delete(msg.id);
+          clearTimeout(entry.timer);
+          if (msg.ok) entry.resolve(msg.data);
+          else entry.reject(new Error(String(msg.error || "Desktop agent error")));
+        }
+      } catch {}
+    };
+  });
+}
+
+function desktopCall(action, payload = {}, timeoutMs = 15000) {
+  if (!desktopWs || desktopWs.readyState !== WebSocket.OPEN) {
+    return Promise.reject(new Error("Windows Desktop Agent is not connected."));
+  }
+  const id = `dw_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      desktopPending.delete(id);
+      reject(new Error(`Desktop agent action "${action}" timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    desktopPending.set(id, { resolve, reject, timer });
+    desktopWs.send(JSON.stringify({ id, action, token: desktopToken, payload }));
+  });
+}
 
 function safeOrigin(urlStr) {
   try {
@@ -53,6 +173,7 @@ function broadcastEvent(event) {
       subscribers.delete(tabId);
     });
   }
+  chrome.runtime.sendMessage({ scope: "real-browser-event", event }).catch(() => {});
 }
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
@@ -97,6 +218,111 @@ async function ensureDebugger(tabId) {
 chrome.debugger.onDetach.addListener((source) => {
   if (source?.tabId) attachedDebuggerTabs.delete(source.tabId);
 });
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  const tabId = source?.tabId;
+  if (!tabId) return;
+  let diag = diagnosticsByTab.get(tabId);
+  if (!diag) {
+    diag = { consoleErrors: [], networkErrors: [] };
+    diagnosticsByTab.set(tabId, diag);
+  }
+  if (method === "Runtime.consoleAPICalled" && (params?.type === "error" || params?.type === "warning")) {
+    const text = (params.args || []).map((a) => a.value ?? a.description ?? "").join(" ").slice(0, 400);
+    diag.consoleErrors.push({ level: params.type, text, timestamp: Date.now() });
+    if (diag.consoleErrors.length > 50) diag.consoleErrors.shift();
+  } else if (method === "Runtime.exceptionThrown") {
+    const text = params?.exceptionDetails?.exception?.description || params?.exceptionDetails?.text || "Uncaught exception";
+    diag.consoleErrors.push({ level: "exception", text: String(text).slice(0, 400), timestamp: Date.now() });
+    if (diag.consoleErrors.length > 50) diag.consoleErrors.shift();
+  } else if (method === "Network.responseReceived" && params?.response?.status >= 400) {
+    diag.networkErrors.push({
+      url: params.response.url,
+      status: params.response.status,
+      statusText: params.response.statusText || "",
+      timestamp: Date.now(),
+    });
+    if (diag.networkErrors.length > 50) diag.networkErrors.shift();
+  }
+});
+
+async function enableDiagnostics(tabId) {
+  await cdpSend(tabId, "Runtime.enable");
+  await cdpSend(tabId, "Network.enable");
+}
+
+async function extractAriaSnapshot(tabId) {
+  const res = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      const vw = Math.max(1, window.innerWidth);
+      const vh = Math.max(1, window.innerHeight);
+      const lines = [`- document "${document.title || "Untitled"}" [url=${window.location.href}]`];
+      const nodes = document.querySelectorAll(
+        'h1, h2, h3, nav, main, form, a[href], button, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="tab"]'
+      );
+      let refIdx = 0;
+      const refs = [];
+      for (const el of nodes) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        if (rect.bottom < 0 || rect.top > vh || rect.right < 0 || rect.left > vw) continue;
+        const tag = el.tagName.toLowerCase();
+        const role = el.getAttribute("role") || (tag === "a" ? "link" : tag === "input" ? (el.type || "textbox") : tag);
+        const name = (el.getAttribute("aria-label") || el.innerText || el.placeholder || el.value || "").trim().replace(/\s+/g, " ").slice(0, 80);
+        const ref = `e${refIdx++}`;
+        const cx = Math.round(((rect.left + rect.width / 2) / vw) * 1000);
+        const cy = Math.round(((rect.top + rect.height / 2) / vh) * 1000);
+        const attrs = [];
+        if (el.disabled) attrs.push("disabled");
+        if (typeof el.checked === "boolean" && el.checked) attrs.push("checked");
+        const attrStr = attrs.length ? ` [${attrs.join(", ")}]` : "";
+        lines.push(`  - ${role} "${name}" [ref=${ref}]${attrStr}`);
+        refs.push({ ref, role, name, normalizedCenter: { x: Math.max(0, Math.min(999, cx)), y: Math.max(0, Math.min(999, cy)) } });
+        if (refs.length >= 180) break;
+      }
+      return { yaml: lines.join("\n"), refs };
+    },
+  });
+  return res?.[0]?.result || { yaml: "", refs: [] };
+}
+
+async function captureAnnotatedScreenshot(tabId) {
+  const elements = await extractInteractiveElements(tabId);
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    args: [elements],
+    func: (els) => {
+      const existing = document.getElementById("__moho_som_overlay__");
+      if (existing) existing.remove();
+      const overlay = document.createElement("div");
+      overlay.id = "__moho_som_overlay__";
+      overlay.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483647;";
+      for (const el of els) {
+        const box = document.createElement("div");
+        box.style.cssText = `position:fixed;left:${el.rect.x}px;top:${el.rect.y}px;width:${el.rect.width}px;height:${el.rect.height}px;border:2px solid #f43f5e;box-sizing:border-box;`;
+        const tag = document.createElement("span");
+        tag.textContent = String(el.index);
+        tag.style.cssText = "position:absolute;top:-16px;left:0;background:#f43f5e;color:#fff;font:bold 11px monospace;padding:0 4px;border-radius:3px;line-height:15px;";
+        box.appendChild(tag);
+        overlay.appendChild(box);
+      }
+      document.documentElement.appendChild(overlay);
+    },
+  });
+  try {
+    const screenshot = await captureTabScreenshot(tabId, { format: "png" });
+    return { screenshot, elements };
+  } finally {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const existing = document.getElementById("__moho_som_overlay__");
+        if (existing) existing.remove();
+      },
+    }).catch(() => {});
+  }
+}
 
 async function cdpSend(tabId, method, params = {}) {
   await ensureDebugger(tabId);
@@ -285,11 +511,24 @@ async function extractInteractiveElements(tabId) {
         if (rect.bottom < 0 || rect.top > vh || rect.right < 0 || rect.left > vw) continue;
         const cx = rect.left + rect.width / 2;
         const cy = rect.top + rect.height / 2;
-        const selector = el.id
-          ? `#${CSS.escape(el.id)}`
-          : el.getAttribute("name")
-            ? `${el.tagName.toLowerCase()}[name="${CSS.escape(el.getAttribute("name"))}"]`
-            : el.tagName.toLowerCase();
+        let selector;
+        if (el.id) {
+          selector = `#${CSS.escape(el.id)}`;
+        } else if (el.getAttribute("name")) {
+          selector = `${el.tagName.toLowerCase()}[name="${CSS.escape(el.getAttribute("name"))}"]`;
+        } else if (el.getAttribute("data-testid")) {
+          selector = `[data-testid="${CSS.escape(el.getAttribute("data-testid"))}"]`;
+        } else {
+          const tag = el.tagName.toLowerCase();
+          const parent = el.parentElement;
+          if (parent) {
+            const siblings = Array.from(parent.children).filter((c) => c.tagName === el.tagName);
+            const pos = siblings.indexOf(el) + 1;
+            selector = siblings.length > 1 ? `${tag}:nth-of-type(${pos})` : tag;
+          } else {
+            selector = tag;
+          }
+        }
         items.push({
           index: idx++,
           tag: el.tagName.toLowerCase(),
@@ -659,8 +898,9 @@ async function handleBridgeCommand(command, sender) {
       return {
         installed: true,
         version: EXTENSION_VERSION,
-        bridgeVersion: 4,
+        bridgeVersion: 5,
         channel: BRIDGE_CHANNEL,
+        desktopAgentConnected: Boolean(desktopWs && desktopWs.readyState === WebSocket.OPEN),
         capabilities: [
           "workspace",
           "cdp-input",
@@ -672,6 +912,15 @@ async function handleBridgeCommand(command, sender) {
           "computer-use-gemini",
           "computer-use-anthropic",
           "computer-use-openai",
+          "windows-desktop-agent",
+          "windows-virtual-desktop",
+          "desktop-live-stream",
+          "local-folder-brain",
+          "aria-snapshot",
+          "set-of-mark",
+          "console-network-diagnostics",
+          "side-panel",
+          "webmcp",
           "zoom-screenshot",
         ],
       };
@@ -950,7 +1199,8 @@ async function handleBridgeCommand(command, sender) {
         return executeUnifiedAction(tabId, { type: "type", text: inp.text || "" });
       }
       if (inp.type === "key") {
-        return executeUnifiedAction(tabId, { type: "press_key", key: inp.key || "" });
+        const keyAction = inp.action === "keyDown" ? "key_down" : inp.action === "keyUp" ? "key_up" : "press_key";
+        return executeUnifiedAction(tabId, { type: keyAction, key: inp.key || "", modifiers: inp.modifiers });
       }
       if (inp.type === "wheel") {
         return executeUnifiedAction(tabId, {
@@ -959,14 +1209,98 @@ async function handleBridgeCommand(command, sender) {
           y: inp.y,
           deltaX: inp.deltaX,
           deltaY: inp.deltaY,
+          modifiers: inp.modifiers,
         });
       }
+      const ptrMap = {
+        move: "move",
+        down: "mouse_down",
+        up: "mouse_up",
+        click: "click",
+        dblclick: "double_click",
+        tripleclick: "triple_click",
+        rightclick: "right_click",
+        middleclick: "middle_click",
+      };
       return executeUnifiedAction(tabId, {
-        type: inp.action === "dblclick" ? "double_click" : inp.action === "rightclick" ? "right_click" : "click",
+        type: ptrMap[inp.action] || "click",
         x: inp.x,
         y: inp.y,
+        button: inp.button,
+        modifiers: inp.modifiers,
       });
     }
+
+    // --- v5.0 Windows 10/11 Desktop Agent Bridge Commands ---
+    case "desktopConnect":
+      return desktopConnect(payload.url, payload.token);
+
+    case "desktopDisconnect":
+      if (desktopWs) {
+        try { desktopWs.close(); } catch {}
+        desktopWs = null;
+      }
+      return { ok: true };
+
+    case "desktopStatus":
+      if (!desktopWs || desktopWs.readyState !== WebSocket.OPEN) {
+        return { connected: false, endpoint: desktopEndpoint };
+      }
+      return desktopCall("status").then((st) => ({ ...st, connected: true, endpoint: desktopEndpoint }));
+
+    case "desktopExecute":
+      return desktopCall(String(payload.action || ""), payload.payload || {});
+
+    case "desktopStartStream":
+      return desktopCall("start_stream", payload);
+
+    case "desktopStopStream":
+      return desktopCall("stop_stream", {});
+
+    case "desktopEmergencyStop": {
+      const res = await desktopCall("emergency_stop", { closeVirtualDesktop: Boolean(payload.closeVirtualDesktop) });
+      broadcastEvent({ type: "desktop.emergency_stop", workspaceId: "desktop", timestamp: Date.now() });
+      return res;
+    }
+
+    case "desktopResume":
+      return desktopCall("resume", {});
+
+    case "workspaceAriaSnapshot": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      return extractAriaSnapshot(tabId);
+    }
+
+    case "workspaceAnnotatedScreenshot": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      return captureAnnotatedScreenshot(tabId);
+    }
+
+    case "workspaceDiagnostics": {
+      const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
+      const tabId = payload.tabId || ws.activeTabId;
+      await enableDiagnostics(tabId).catch(() => {});
+      return diagnosticsByTab.get(tabId) || { consoleErrors: [], networkErrors: [] };
+    }
+
+    case "folderBrainSyncStatus":
+      if (origin) {
+        folderBrainByOrigin.set(origin, {
+          connected: Boolean(payload.connected),
+          folderName: payload.folderName || null,
+          indexedFileCount: Number(payload.indexedFileCount || 0),
+          updatedAt: Date.now(),
+        });
+        broadcastEvent({
+          type: "folder_brain.updated",
+          workspaceId: origin,
+          payload: folderBrainByOrigin.get(origin),
+          timestamp: Date.now(),
+        });
+      }
+      return { ok: true };
 
     case "agentExecute": {
       const ws = getWorkspaceForOrigin(origin, payload.workspaceId);
@@ -1031,10 +1365,72 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (message.action === "workspace-status") {
         const origin = safeOrigin(message.url || "");
+        const folderBrain = origin ? (folderBrainByOrigin.get(origin) || null) : null;
         for (const ws of workspaces.values()) {
-          if (ws.origin === origin) return { ok: true, workspace: ws };
+          if (ws.origin === origin) return { ok: true, workspace: ws, folderBrain };
         }
-        return { ok: true, workspace: null };
+        return { ok: true, workspace: null, folderBrain };
+      }
+      if (message.action === "desktop-status") {
+        if (!desktopWs || desktopWs.readyState !== WebSocket.OPEN) {
+          return { ok: true, status: { connected: false } };
+        }
+        try {
+          const st = await desktopCall("status");
+          return { ok: true, status: { ...st, connected: true } };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+      if (message.action === "desktop-connect") {
+        try {
+          const st = await desktopConnect(message.url || DEFAULT_DESKTOP_URL, message.token || "");
+          if (message.startStream) {
+            await desktopCall("start_stream", { fps: 8, quality: 68, maxWidth: 1280 }).catch(() => {});
+          }
+          return { ok: true, status: st };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+      if (message.action === "desktop-disconnect") {
+        if (desktopWs) {
+          try { desktopWs.close(); } catch {}
+          desktopWs = null;
+        }
+        return { ok: true };
+      }
+      if (message.action === "desktop-new-vd") {
+        try {
+          const res = await desktopCall("create_virtual_desktop", {});
+          return { ok: true, data: res };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+      if (message.action === "desktop-emergency-stop") {
+        try {
+          const res = await desktopCall("emergency_stop", { closeVirtualDesktop: false });
+          return { ok: true, data: res };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+      if (message.action === "inspect-aria-active" && message.tabId) {
+        try {
+          const snap = await extractAriaSnapshot(message.tabId);
+          return { ok: true, snapshot: snap.yaml, refs: snap.refs };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+      if (message.action === "inspect-diagnostics-active" && message.tabId) {
+        try {
+          await enableDiagnostics(message.tabId).catch(() => {});
+          return { ok: true, diagnostics: diagnosticsByTab.get(message.tabId) || { consoleErrors: [], networkErrors: [] } };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
       }
       if (message.action === "toggle-agent-control" && message.workspaceId) {
         const ws = workspaces.get(message.workspaceId);

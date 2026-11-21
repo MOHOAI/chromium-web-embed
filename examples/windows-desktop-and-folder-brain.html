@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Moho AI Studio — Windows Virtual Desktop & Local Folder Brain v5.0</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
+      background: #090e1a;
+      color: #f1f5f9;
+      padding: 20px;
+      line-height: 1.5;
+    }
+    h1 { font-size: 20px; color: #38bdf8; margin-bottom: 6px; }
+    .sub { color: #94a3b8; font-size: 13px; margin-bottom: 18px; }
+    .grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; }
+    @media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
+    .panel {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .panel h2 { font-size: 15px; color: #e2e8f0; margin-bottom: 10px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    input, textarea, select {
+      background: #0b1120;
+      border: 1px solid #334155;
+      color: #f8fafc;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+    button {
+      border: none;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-blue { background: #0284c7; color: #fff; }
+    .btn-green { background: #059669; color: #fff; }
+    .btn-red { background: #dc2626; color: #fff; }
+    .btn-amber { background: #d97706; color: #fff; }
+    .btn-slate { background: #334155; color: #f8fafc; }
+    .screen-box {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #020617;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #64748b;
+      position: relative;
+    }
+    .screen-box img { width: 100%; height: 100%; object-fit: contain; user-select: none; }
+    .file-list {
+      max-height: 170px;
+      overflow-y: auto;
+      background: #0b1120;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 8px;
+      margin-bottom: 10px;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 12px;
+      direction: ltr;
+    }
+    .file-item { padding: 4px 6px; border-radius: 5px; cursor: pointer; }
+    .file-item:hover { background: #1e293b; color: #38bdf8; }
+    textarea { width: 100%; min-height: 190px; font-family: ui-monospace, Consolas, monospace; direction: ltr; margin-bottom: 10px; }
+    .log {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #93c5fd;
+      background: #0b1120;
+      padding: 8px 10px;
+      border-radius: 8px;
+      min-height: 36px;
+    }
+  </style>
+</head>
+<body>
+  <h1>✦ Moho AI Studio — v5.0 Control Center</h1>
+  <p class="sub">معاينة البث المباشر لسطح المكتب الافتراضي في ويندوز 10/11 + جسر الملفات الحقيقي (Local Folder Brain)</p>
+
+  <div class="grid">
+    <!-- Left: Windows 10/11 Virtual Desktop Live Preview -->
+    <div class="panel">
+      <h2>🖥️ التحكم بالحاسوب (ويندوز 10/11 — سطح مكتب افتراضي وبث مباشر)</h2>
+      <div class="controls">
+        <input id="ws-token" type="password" placeholder="Desktop Agent Token (اختياري مع --no-auth)" style="flex:1;direction:ltr;" />
+        <button id="btn-connect-desktop" class="btn-green">اتصال عبر الإضافة</button>
+        <button id="btn-new-vd" class="btn-blue">فتح سطح مكتب فارغ</button>
+        <button id="btn-close-vd" class="btn-slate">إغلاق السطح الافتراضي</button>
+        <button id="btn-kill" class="btn-red">إيقاف طارئ</button>
+      </div>
+      <div id="screen-box" class="screen-box">
+        <span>اضغط "اتصال عبر الإضافة" لعرض البث المباشر للشاشة</span>
+      </div>
+      <div id="desktop-log" class="log">الحالة: بانتظار الاتصال بوسيط ويندوز...</div>
+    </div>
+
+    <!-- Right: Local Folder Brain -->
+    <div class="panel">
+      <h2>📂 جسر الملفات الحقيقي (Local Folder Brain)</h2>
+      <div class="controls">
+        <button id="btn-pick-folder" class="btn-blue">اختيار مجلد مشروعك</button>
+        <button id="btn-direct-apply" class="btn-green" disabled>⚡ تطبيق مباشر على القرص</button>
+        <button id="btn-undo" class="btn-amber" disabled>↩️ تراجع</button>
+      </div>
+      <div id="file-list" class="file-list">لم يتم ربط مجلد بعد...</div>
+      <textarea id="editor" placeholder="اختر ملفًا من القائمة لقراءته وتعديله مباشرة..."></textarea>
+      <div id="folder-log" class="log">الحالة: استخدم File System Access API لفتح مجلد مشروع حقيقي.</div>
+    </div>
+  </div>
+
+  <script>
+    // --- Bridge Helper (talks directly to Moho Browser Workspace Extension v5) ---
+    const CHANNEL = "real-browser-web/v5";
+    const pending = new Map();
+    const screenBox = document.getElementById("screen-box");
+    const desktopLog = document.getElementById("desktop-log");
+    let previewImg = null;
+    let lastFrame = null;
+    let dragging = false;
+
+    window.addEventListener("message", (ev) => {
+      if (ev.source !== window || !ev.data || ev.data.channel !== CHANNEL) return;
+      if (ev.data.event && ev.data.event.type === "desktop.frame") {
+        lastFrame = ev.data.event.payload;
+        if (!previewImg) {
+          screenBox.innerHTML = "";
+          previewImg = document.createElement("img");
+          previewImg.draggable = false;
+          screenBox.appendChild(previewImg);
+          attachInteractiveHandlers(previewImg);
+        }
+        previewImg.src = lastFrame.dataUrl;
+        return;
+      }
+      if (ev.data.id && pending.has(ev.data.id)) {
+        const p = pending.get(ev.data.id);
+        pending.delete(ev.data.id);
+        if (ev.data.ok) p.resolve(ev.data.data);
+        else p.reject(new Error(ev.data.error || "Bridge error"));
+      }
+    });
+
+    function bridgeCall(action, payload = {}) {
+      const id = "demo_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        window.postMessage({ channel: CHANNEL, id, action, payload }, "*");
+      });
+    }
+
+    function mapCoords(img, e) {
+      if (!lastFrame) return null;
+      const r = img.getBoundingClientRect();
+      const ia = lastFrame.width / Math.max(1, lastFrame.height);
+      const ba = r.width / r.height;
+      let rw = r.width, rh = r.height, ox = 0, oy = 0;
+      if (ia > ba) { rh = r.width / ia; oy = (r.height - rh) / 2; }
+      else { rw = r.height * ia; ox = (r.width - rw) / 2; }
+      const rx = (e.clientX - r.left - ox) / rw;
+      const ry = (e.clientY - r.top - oy) / rh;
+      if (rx < 0 || rx > 1 || ry < 0 || ry > 1) return null;
+      return { x: Math.round(rx * lastFrame.screenWidth), y: Math.round(ry * lastFrame.screenHeight) };
+    }
+
+    function attachInteractiveHandlers(img) {
+      img.addEventListener("contextmenu", (e) => e.preventDefault());
+      img.addEventListener("mousedown", (e) => {
+        const pt = mapCoords(img, e); if (!pt) return;
+        dragging = true;
+        const btn = e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
+        bridgeCall("desktopExecute", { action: "mouse_down", payload: { x: pt.x, y: pt.y, button: btn } });
+      });
+      window.addEventListener("mousemove", (e) => {
+        if (!dragging) return;
+        const pt = mapCoords(img, e); if (!pt) return;
+        bridgeCall("desktopExecute", { action: "move", payload: { x: pt.x, y: pt.y } });
+      });
+      window.addEventListener("mouseup", (e) => {
+        if (!dragging) return;
+        dragging = false;
+        const pt = mapCoords(img, e); if (!pt) return;
+        const btn = e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
+        bridgeCall("desktopExecute", { action: "mouse_up", payload: { x: pt.x, y: pt.y, button: btn } });
+      });
+      img.addEventListener("dblclick", (e) => {
+        const pt = mapCoords(img, e); if (!pt) return;
+        bridgeCall("desktopExecute", { action: "double_click", payload: pt });
+      });
+      img.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const pt = mapCoords(img, e); if (!pt) return;
+        bridgeCall("desktopExecute", { action: "scroll", payload: { x: pt.x, y: pt.y, deltaX: Math.round(e.deltaX), deltaY: Math.round(e.deltaY) } });
+      }, { passive: false });
+    }
+
+    document.getElementById("btn-connect-desktop").onclick = async () => {
+      try {
+        await bridgeCall("subscribe");
+        const token = document.getElementById("ws-token").value.trim();
+        const st = await bridgeCall("desktopConnect", { token });
+        await bridgeCall("desktopStartStream", { fps: 10, quality: 70, maxWidth: 1280 });
+        desktopLog.textContent = `متصل بـ ${st.os} — البث المباشر يعمل!`;
+      } catch (err) {
+        desktopLog.textContent = "خطأ: " + err.message;
+      }
+    };
+
+    document.getElementById("btn-new-vd").onclick = async () => {
+      try {
+        await bridgeCall("desktopExecute", { action: "create_virtual_desktop", payload: {} });
+        desktopLog.textContent = "تم فتح سطح مكتب افتراضي جديد وفارغ!";
+      } catch (err) { desktopLog.textContent = "خطأ: " + err.message; }
+    };
+
+    document.getElementById("btn-close-vd").onclick = async () => {
+      try {
+        await bridgeCall("desktopExecute", { action: "close_virtual_desktop", payload: {} });
+        desktopLog.textContent = "تم إغلاق سطح المكتب الافتراضي والعودة لسطح المكتب الرئيسي.";
+      } catch (err) { desktopLog.textContent = "خطأ: " + err.message; }
+    };
+
+    document.getElementById("btn-kill").onclick = async () => {
+      try {
+        await bridgeCall("desktopEmergencyStop", { closeVirtualDesktop: false });
+        desktopLog.textContent = "تم تفعيل الإيقاف الطارئ للوسيط!";
+      } catch (err) { desktopLog.textContent = "خطأ: " + err.message; }
+    };
+
+    // --- Local Folder Brain Demo (File System Access API) ---
+    let rootHandle = null;
+    let activeFilePath = null;
+    const undoStack = [];
+    const fileHandles = new Map();
+    const fileListEl = document.getElementById("file-list");
+    const editorEl = document.getElementById("editor");
+    const folderLog = document.getElementById("folder-log");
+    const applyBtn = document.getElementById("btn-direct-apply");
+    const undoBtn = document.getElementById("btn-undo");
+
+    async function scanDir(dirHandle, prefix = "") {
+      for await (const [name, handle] of dirHandle.entries()) {
+        if (["node_modules", ".git", "dist", "__pycache__", ".venv"].includes(name)) continue;
+        const rel = prefix ? `${prefix}/${name}` : name;
+        if (handle.kind === "directory") {
+          await scanDir(handle, rel);
+        } else {
+          fileHandles.set(rel, handle);
+        }
+      }
+    }
+
+    document.getElementById("btn-pick-folder").onclick = async () => {
+      try {
+        rootHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+        fileHandles.clear();
+        await scanDir(rootHandle);
+        fileListEl.innerHTML = "";
+        for (const rel of Array.from(fileHandles.keys()).sort()) {
+          const div = document.createElement("div");
+          div.className = "file-item";
+          div.textContent = rel;
+          div.onclick = async () => {
+            const file = await fileHandles.get(rel).getFile();
+            activeFilePath = rel;
+            editorEl.value = await file.text();
+            applyBtn.disabled = false;
+            folderLog.textContent = `الملف المفتوح: ${rel} (${file.size} bytes)`;
+          };
+          fileListEl.appendChild(div);
+        }
+        folderLog.textContent = `تم ربط المجلد "${rootHandle.name}" (${fileHandles.size} ملف).`;
+        bridgeCall("folderBrainSyncStatus", { connected: true, folderName: rootHandle.name, indexedFileCount: fileHandles.size }).catch(() => {});
+      } catch (err) {
+        folderLog.textContent = "لم يتم اختيار مجلد: " + err.message;
+      }
+    };
+
+    applyBtn.onclick = async () => {
+      if (!activeFilePath || !fileHandles.has(activeFilePath)) return;
+      const fh = fileHandles.get(activeFilePath);
+      const oldText = await (await fh.getFile()).text();
+      undoStack.push({ path: activeFilePath, content: oldText });
+      const writable = await fh.createWritable();
+      await writable.write(editorEl.value);
+      await writable.close();
+      undoBtn.disabled = false;
+      folderLog.textContent = `✅ تم تطبيق التعديل مباشرة على القرص: ${activeFilePath}`;
+    };
+
+    undoBtn.onclick = async () => {
+      const last = undoStack.pop();
+      if (!last) return;
+      const fh = fileHandles.get(last.path);
+      const writable = await fh.createWritable();
+      await writable.write(last.content);
+      await writable.close();
+      if (activeFilePath === last.path) editorEl.value = last.content;
+      undoBtn.disabled = undoStack.length === 0;
+      folderLog.textContent = `↩️ تم التراجع عن آخر تعديل في: ${last.path}`;
+    };
+  </script>
+</body>
+</html>

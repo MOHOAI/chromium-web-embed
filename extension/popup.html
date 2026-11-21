@@ -7,35 +7,44 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      width: 350px;
+      width: 370px;
       font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
-      background: #0f172a;
+      background: #0b1120;
       color: #f8fafc;
-      padding: 16px;
+      padding: 14px;
     }
     .header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
       padding-bottom: 10px;
       border-bottom: 1px solid #1e293b;
     }
     .title { font-size: 15px; font-weight: 700; color: #38bdf8; }
-    .version { font-size: 11px; background: #1e293b; color: #94a3b8; padding: 2px 8px; border-radius: 999px; }
+    .version { font-size: 11px; background: #1e293b; color: #7dd3fc; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
     .card {
-      background: #1e293b;
+      background: #131c31;
       border-radius: 10px;
-      padding: 12px;
+      padding: 11px 12px;
       margin-bottom: 10px;
-      border: 1px solid #334155;
+      border: 1px solid #24324d;
+    }
+    .card-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: #e2e8f0;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
     .row {
       display: flex;
       justify-content: space-between;
       align-items: center;
       margin-bottom: 6px;
-      font-size: 13px;
+      font-size: 12.5px;
     }
     .row:last-child { margin-bottom: 0; }
     .label { color: #94a3b8; }
@@ -47,31 +56,47 @@
     }
     .badge-ok { background: #064e3b; color: #34d399; }
     .badge-warn { background: #78350f; color: #fbbf24; }
+    .badge-err { background: #7f1d1d; color: #fca5a5; }
     .badge-off { background: #334155; color: #cbd5e1; }
-    .detail { font-size: 12px; color: #cbd5e1; margin-top: 6px; word-break: break-word; }
-    .actions { display: flex; gap: 8px; margin-top: 10px; }
+    .detail { font-size: 11.5px; color: #cbd5e1; margin-top: 5px; word-break: break-word; line-height: 1.4; }
+    .input-row { display: flex; gap: 6px; margin-top: 8px; }
+    input {
+      flex: 1;
+      background: #0b1120;
+      border: 1px solid #334155;
+      border-radius: 7px;
+      color: #f8fafc;
+      padding: 6px 8px;
+      font-size: 11.5px;
+      direction: ltr;
+    }
+    input:focus { outline: none; border-color: #38bdf8; }
+    .actions { display: flex; gap: 6px; margin-top: 8px; }
     button {
       flex: 1;
       border: none;
-      border-radius: 8px;
-      padding: 9px 10px;
-      font-size: 12px;
+      border-radius: 7px;
+      padding: 8px 9px;
+      font-size: 11.5px;
       font-weight: 600;
       cursor: pointer;
       transition: opacity 0.15s;
     }
     button:hover { opacity: 0.9; }
-    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
     .btn-primary { background: #0284c7; color: #fff; }
+    .btn-success { background: #059669; color: #fff; }
     .btn-danger { background: #dc2626; color: #fff; }
+    .btn-muted { background: #334155; color: #f1f5f9; }
   </style>
 </head>
 <body>
   <div class="header">
     <span class="title">✦ Moho Browser Workspace</span>
-    <span class="version">v4.0.0</span>
+    <span id="ext-version" class="version">v5.0.0</span>
   </div>
 
+  <!-- Browser Workspace Card -->
   <div class="card">
     <div class="row">
       <span class="label">حالة الجسر (Bridge)</span>
@@ -81,19 +106,41 @@
       <span class="label">مساحة العمل</span>
       <span id="workspace-status" class="badge badge-off">غير متصلة</span>
     </div>
-    <div id="workspace-detail" class="detail">افتح تطبيقًا متصلًا لبدء مساحة عمل معزولة.</div>
-  </div>
-
-  <div class="card">
     <div class="row">
-      <span class="label">تحكم وكلاء الذكاء الاصطناعي</span>
+      <span class="label">تحكم وكيل المتصفح</span>
       <span id="agent-status" class="badge badge-off">غير معروف</span>
     </div>
-    <div class="detail">يدعم: Gemini Computer Use و Claude و OpenAI CUA</div>
+    <div id="workspace-detail" class="detail">افتح تطبيقًا متصلًا لبدء مساحة عمل معزولة.</div>
     <div class="actions">
       <button id="toggle-agent" class="btn-primary" disabled>تبديل تحكم الوكيل</button>
       <button id="close-workspace" class="btn-danger" disabled>إغلاق المساحة</button>
     </div>
+  </div>
+
+  <!-- Windows 10/11 Desktop Computer-Use Agent Card -->
+  <div class="card">
+    <div class="card-title">
+      <span>🖥️ وسيط التحكم بحاسوب ويندوز 10/11</span>
+      <span id="desktop-status" class="badge badge-off">غير متصل</span>
+    </div>
+    <div id="desktop-detail" class="detail">شغّل desktop-agent/start_agent.bat ثم أدخل التوكن للاتصال الآمن.</div>
+    <div class="input-row">
+      <input id="desktop-token" type="password" placeholder="Auth Token (optional in --no-auth)" />
+    </div>
+    <div class="actions">
+      <button id="desktop-connect" class="btn-success">اتصال بالوسيط</button>
+      <button id="desktop-new-vd" class="btn-primary" disabled>سطح مكتب فارغ</button>
+      <button id="desktop-stop" class="btn-danger" disabled>إيقاف طارئ</button>
+    </div>
+  </div>
+
+  <!-- Local Folder Brain Card -->
+  <div class="card">
+    <div class="card-title">
+      <span>📂 جسر الملفات الحقيقي (Local Folder Brain)</span>
+      <span id="folder-status" class="badge badge-off">غير مرتبط</span>
+    </div>
+    <div id="folder-detail" class="detail">اختر مجلد مشروعك من تطبيق الويب (File System Access API) لتمكين التعديل المباشر.</div>
   </div>
 
   <script src="popup.js"></script>

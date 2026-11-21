@@ -1,22 +1,29 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "116",
   "name": "Moho Browser Workspace",
-  "version": "4.2.0",
-  "description": "Isolated Chromium workspace bridge for web apps, full local browser automation, MCP tools, and multi-provider AI Computer Use agents (Gemini, Claude, OpenAI, and custom VLMs).",
+  "version": "5.1.0",
+  "description": "Isolated Chromium workspace bridge, Chrome Side Panel, WebMCP, Set-of-Mark & ARIA snapshots, Windows 10/11 Virtual Desktop Computer-Use broker with live preview, Local Folder Brain, and multi-provider AI agents (Gemini, Claude, OpenAI/ChatGPT, MOHO AI).",
   "permissions": [
     "tabs",
     "tabGroups",
     "debugger",
     "scripting",
-    "storage"
+    "storage",
+    "sidePanel"
   ],
   "host_permissions": [
     "http://*/*",
-    "https://*/*"
+    "https://*/*",
+    "ws://127.0.0.1/*",
+    "ws://localhost/*"
   ],
   "background": {
     "service_worker": "service-worker.js",
     "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
   },
   "content_scripts": [
     {
@@ -37,8 +44,14 @@
       "https://*/*"
     ]
   },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Moho Browser Workspace"
+    "default_title": "Moho Browser Workspace v5.1"
   }
 }

@@ -1,79 +1,39 @@
-# chromium-web-embed (v4.0.0)
+# chromium-web-embed `v5.1.0`
 
-مكتبة TypeScript وإضافة متصفح Chrome/Chromium (Manifest V3) لإنشاء مساحات عمل معزولة داخل المتصفح الحقيقي وتشغيل **وكلاء الذكاء الاصطناعي (AI Agents)** وميزة **التحكم في المتصفح / استخدام الحاسوب (Computer Use)** عبر جميع المزودين:
+**Real Chromium Browser Workspace + Chrome Side Panel + WebMCP + ARIA & Set-of-Mark Grounding + Windows 10/11 Virtual Desktop Computer-Use Agent + Local Folder Brain (`FileSystemObserver` + Surgical Patching) + Multi-Provider AI Runtime (Gemini, Claude, OpenAI/ChatGPT, MCP, MOHO AI).**
 
-- **Google Gemini 4 & 3.x** (`gemini-4-carbon`, `gemini-4-argon`, `gemini-4-hydrogen`, `gemini-3.8-flash`, `gemini-3.5-flash-lite`, `gemini-3-flash-preview`) عبر [Gemini Interactions API](https://aistudio.google.com/docs/computer-use)
-- **Anthropic Claude** (`computer_toolset_20260801`) عبر [Claude Computer Use Tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool)
-- **OpenAI CUA / Responses API** (`type: "computer"`) عبر [OpenAI Computer Use Guide](https://developers.openai.com/api/docs/guides/tools-computer-use)
-- **أي مزود مخصص أو VLM محلي** عبر `GenericComputerUseAdapter` و`UnifiedComputerAction`
+## ✨ What's New in `v5.1.0`
 
-## التثبيت
+- **🌐 Chrome WebMCP Native Integration (`chromium-web-embed/webmcp`)**
+  - Registers all Browser, Windows Desktop, and Local Folder Brain tools natively into Chrome's `document.modelContext.registerTool()` API with `AbortSignal` cleanup and `readOnlyHint` annotations, plus `discoverDeclarativeWebMCPForms()` to detect `<form toolname="...">` tools on web pages.
+- **🎯 ARIA Accessibility Snapshots, Set-of-Mark (SoM) & Live Diagnostics**
+  - **`getAriaSnapshot()`**: Playwright-MCP-style compact YAML accessibility tree with deterministic element refs (`e0`, `e1`...) — slashes LLM token cost and works even with text-only models.
+  - **`captureAnnotatedScreenshot()`**: Draws numbered Set-of-Mark bounding boxes over interactive elements before taking a screenshot, then cleans up immediately for dramatically higher Vision LLM click accuracy.
+  - **`getDiagnostics()`**: Captures live browser `console.error`/`warn`, uncaught exceptions, and failed HTTP network requests (`>= 400`) via CDP.
+- **🧩 Chrome MV3 Side Panel & 20s WebSocket Keepalive**
+  - Built-in persistent **Side Panel** (`extension/sidepanel.html`) showing live Windows Virtual Desktop streaming preview, Emergency Kill Switch, ARIA snapshot inspector, and live console error viewer.
+  - Automatic 20-second WebSocket keepalive heartbeat (`minimum_chrome_version: "116"`) so Chrome MV3 never kills the Windows Desktop Agent connection after 30s of idle time.
+- **🖥️ Windows 10/11 Virtual Desktop Computer-Use Agent (`desktop-agent/` & `chromium-web-embed/desktop`)**
+  - Strict **Windows 10 & Windows 11** local loopback broker (`ws://127.0.0.1:47892`) connected through the Chrome extension.
+  - **Fresh Empty Virtual Desktop** (`createVirtualDesktop`, `switchVirtualDesktop`, `closeVirtualDesktop`).
+  - **Smart Frame-Delta Live Preview (`DesktopLiveViewer`)**: Skips unchanged frames via `adler32` hashing to save bandwidth/CPU while maintaining smooth interactive live streaming.
+  - **Win32 Child Control Inspection (`inspectWindowControls`)**: Enumerates native Windows UI controls (`EnumChildWindows`) with captions and coordinates alongside full `SendInput` mouse/drag/Unicode typing/hotkeys.
+- **📂 Local Folder Brain (`chromium-web-embed/local-folder`)**
+  - Powered by **File System Access API** (`showDirectoryPicker`) + **`FileSystemObserver`** real-time directory change watching (with automatic polling fallback).
+  - Automatic **`.gitignore`** parsing, **Surgical Search-and-Replace Patching (`applySearchReplacePatch`)**, Unified Diff previews, **Direct Apply ("تطبيق مباشر")**, and instant **1-click Undo (`undoLastEdit`)**.
+- **🤖 Unified AI Platform Toolkit (`src/providers/ai-toolkit.ts`)**
+  - Ready-to-use schemas and `UnifiedAIToolExecutor` for **Google Gemini**, **Anthropic Claude**, **OpenAI / ChatGPT / MOHO**, and **MCP**.
+
+## Quick Start
 
 ```bash
-npm install github:MOHOAI/chromium-web-embed
+npm install
+npm test
+npm run typecheck
+npm run build
 ```
 
-## الميزات الجديدة في الإصدار 4.0.0
-
-1. **تغطية كاملة لـ 22+ إجراء متصفح عبر Chrome DevTools Protocol (`chrome.debugger`)**:
-   - النقرات والمؤشر: `click`, `double_click`, `triple_click`, `middle_click`, `right_click`, `mouse_down`, `mouse_up`, `move`, `long_press`, `cursor_position`
-   - السحب والإفلات: `drag_and_drop` (يدعم نقطتي البداية/النهاية أو مسار `path` متعدد النقاط)
-   - لوحة المفاتيح: `type` (مع مسح الحقل والضغط على Enter اختياريًا)، `press_key` (مع `repeat`)، `key_down`، `key_up`، `hold_key`، `hotkey`
-   - التمرير والتنقل: `scroll` (بالاتجاه والمسافة أو `deltaX/deltaY`)، `navigate`، `go_back`، `go_forward`، `reload`، `wait`
-   - الرؤية: `take_screenshot` و`zoom` (التقاط منطقة محددة بدقة كاملة لـ Anthropic)
-2. **معالجة تلقائية للإحداثيات**: تحويل الإحداثيات المعيارية (`0-999` في Gemini) أو إحداثيات البكسل إلى أبعاد Viewport الحقيقية تلقائيًا.
-3. **محرك الأمان والـ HITL (`SafetyPolicyEngine`)**:
-   - دعم قرارات الأمان (`safety_decision` في Gemini و`pending_safety_checks` في OpenAI) مع طلب موافقة المستخدم (`onSafetyConfirmation`) وإرجاع `safety_acknowledgement`.
-   - قوائم السماح والحظر (`allowlist` / `blocklist`) للروابط، وتجاوزات السياسات (`disabledSafetyPolicies`)، وسجل التدقيق (`AgentAuditEntry`).
-
-## مثال سريع: Gemini 4 Computer Use
-
-```ts
-import { GoogleGenAI } from "@google/genai";
-import {
-  RealBrowserClient,
-  createManagedBrowserAgent,
-  GeminiComputerUseAdapter,
-  ComputerUseAgentRunner,
-  DEFAULT_COMPUTER_USE_SYSTEM_INSTRUCTION,
-} from "chromium-web-embed";
-
-const ai = new GoogleGenAI();
-const client = new RealBrowserClient();
-await client.connect();
-await client.createWorkspace({ url: "https://aistudio.google.com/docs", agentControlEnabled: true });
-
-const agent = createManagedBrowserAgent({
-  client,
-  safety: { allowlist: ["aistudio.google.com", "google.com"] },
-});
-
-const runner = new ComputerUseAgentRunner({
-  agent,
-  adapter: new GeminiComputerUseAdapter(),
-  turnLimit: 10,
-  onSafetyConfirmation: async ({ decision }) => {
-    return confirm(`تأكيد أمني مطلوب: ${decision.explanation}`) ? "CONTINUE" : "TERMINATE";
-  },
-});
-
-const result = await runner.run("ابحث عن تسعير Gemini API", async ({ prompt, initialScreenshot, toolResults, previousResponse }) => {
-  return ai.interactions.create({
-    model: "gemini-4-hydrogen",
-    system_instruction: DEFAULT_COMPUTER_USE_SYSTEM_INSTRUCTION,
-    previous_interaction_id: previousResponse?.id,
-    input: toolResults ?? [
-      { type: "text", text: prompt! },
-      { type: "image", data: initialScreenshot!.base64, mime_type: initialScreenshot!.mimeType },
-    ],
-    tools: [
-      GeminiComputerUseAdapter.buildToolConfig({
-        environment: "browser",
-        enablePromptInjectionDetection: true,
-      }),
-    ],
-  });
-});
-
-console.log(result.finalText);
-```
+- **Chrome Extension**: Load `extension/` (unpacked) in `chrome://extensions` (Developer Mode), or use `extension-download/real-browser-web-bridge-extension.zip`. Open the **Side Panel** from Chrome's side panel menu.
+- **Windows 10/11 Desktop Agent**: Run `desktop-agent/start_agent.bat`.
+- **Interactive Demo**: Serve `examples/` locally (`npx serve examples`) and open `windows-desktop-and-folder-brain.html` in Chrome.
+- **Full v5 Guide (Arabic)**: See [`docs/V5_WINDOWS_DESKTOP_AND_LOCAL_BRAIN.md`](docs/V5_WINDOWS_DESKTOP_AND_LOCAL_BRAIN.md).
