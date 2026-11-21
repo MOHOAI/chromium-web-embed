@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Moho Custom URI Protocol Dispatcher (moho-agent://) — v7.0.0
+Moho Custom URI Protocol Dispatcher (moho-agent://) — v7.0.1
 ------------------------------------------------------------
-Safely handles 1-click launch links triggered from any web app or browser:
-  - moho-agent://start-sandbox      -> Launches Windows Sandbox Real-Desktop + Host Relay
-  - moho-agent://start-agent        -> Launches Hidden Desktop + Sandbox Terminal Agent
+Safely handles 1-click SILENT launch links triggered from any web app or browser:
+  - moho-agent://start-sandbox      -> Silently launches Windows Sandbox Real-Desktop + Host Relay (no CMD window)
+  - moho-agent://start-sandbox-vis  -> Launches Windows Sandbox with visible window
+  - moho-agent://start-agent        -> Silently launches Hidden Desktop + Sandbox Terminal Agent (no CMD window)
   - moho-agent://open-workspace     -> Opens %USERPROFILE%\\MohoSandboxData\\Workspace in Explorer
   - moho-agent://open-persistent    -> Opens %USERPROFILE%\\MohoSandboxData in Explorer
 
@@ -19,12 +20,24 @@ import subprocess
 import sys
 from urllib.parse import urlparse
 
+CREATE_NO_WINDOW = 0x08000000
+
 
 def get_persistent_root() -> Path:
     root = Path.home() / "MohoSandboxData"
     for sub in ("Workspace", "EdgeProfile", "ChromeProfile", "PortableApps", "Downloads"):
         (root / sub).mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _resolve_pythonw(agent_dir: Path) -> str:
+    pyw = agent_dir / ".venv" / "Scripts" / "pythonw.exe"
+    if pyw.exists():
+        return str(pyw)
+    py = agent_dir / ".venv" / "Scripts" / "python.exe"
+    if py.exists():
+        return str(py)
+    return sys.executable
 
 
 def dispatch_uri(raw_uri: str) -> str:
@@ -34,17 +47,22 @@ def dispatch_uri(raw_uri: str) -> str:
     action = (parsed.netloc or parsed.path.lstrip("/")).strip().lower()
     agent_dir = Path(__file__).resolve().parent
     persistent = get_persistent_root()
+    pyw = _resolve_pythonw(agent_dir)
+    flags = CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
     if action == "start-sandbox":
-        bat = agent_dir / "start_sandbox.bat"
         if sys.platform == "win32":
-            subprocess.Popen(["cmd", "/c", "start", "", str(bat)], cwd=str(agent_dir), close_fds=True)
+            subprocess.Popen([pyw, str(agent_dir / "launch_windows_sandbox.py")], cwd=str(agent_dir), creationflags=flags, close_fds=True)
         return "start-sandbox"
 
-    if action == "start-agent":
-        bat = agent_dir / "start_agent.bat"
+    if action == "start-sandbox-vis":
         if sys.platform == "win32":
-            subprocess.Popen(["cmd", "/c", "start", "", str(bat)], cwd=str(agent_dir), close_fds=True)
+            subprocess.Popen([pyw, str(agent_dir / "launch_windows_sandbox.py"), "--visible"], cwd=str(agent_dir), creationflags=flags, close_fds=True)
+        return "start-sandbox-vis"
+
+    if action == "start-agent":
+        if sys.platform == "win32":
+            subprocess.Popen([pyw, str(agent_dir / "moho_desktop_agent.py")], cwd=str(agent_dir), creationflags=flags, close_fds=True)
         return "start-agent"
 
     if action == "open-workspace":
@@ -63,7 +81,7 @@ def dispatch_uri(raw_uri: str) -> str:
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: protocol_dispatcher.py moho-agent://<start-sandbox|start-agent|open-workspace|open-persistent>")
+        print("Usage: protocol_dispatcher.py moho-agent://<start-sandbox|start-sandbox-vis|start-agent|open-workspace|open-persistent>")
         sys.exit(1)
     try:
         act = dispatch_uri(sys.argv[1])

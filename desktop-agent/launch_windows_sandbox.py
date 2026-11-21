@@ -33,9 +33,92 @@ import sys
 from typing import Any, Optional
 import xml.sax.saxutils as saxutils
 
-LAUNCHER_VERSION = "7.0.0"
+LAUNCHER_VERSION = "7.0.1"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 47892
+
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
+
+SESSION_HTTP_PORT = 47893
+
+
+def start_local_session_http_server(state_getter) -> Optional[ThreadingHTTPServer]:
+    """Localhost-only (127.0.0.1:47893) session handshake for Chrome Extension auto-auth (no CORS wildcard)."""
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.split("?")[0] != "/session":
+                self.send_response(404)
+                self.end_headers()
+                return
+            payload = json.dumps(state_getter()).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format, *args):
+            pass
+
+    try:
+        srv = ThreadingHTTPServer(("127.0.0.1", SESSION_HTTP_PORT), Handler)
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        return srv
+    except Exception:
+        return None
+
+
+def start_stealth_hide_sandbox_window_thread() -> None:
+    """Keeps Windows Sandbox window unminimized (so DWM keeps rendering) while making it invisible & behind all windows."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    def _worker():
+        user32 = ctypes.windll.user32
+        GWL_EXSTYLE = -20
+        WS_EX_TOOLWINDOW = 0x00000080
+        WS_EX_LAYERED = 0x00080000
+        LWA_ALPHA = 0x00000002
+        HWND_BOTTOM = 1
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        SWP_NOACTIVATE = 0x0010
+        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        hidden_hwnds = set()
+
+        for _ in range(90):
+            def _cb(hwnd, _lp):
+                if hwnd in hidden_hwnds or not user32.IsWindowVisible(hwnd):
+                    return True
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length <= 0:
+                    return True
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                title = buf.value.lower()
+                if "windows sandbox" in title or "bac à sable windows" in title or "bac a sable windows" in title:
+                    ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+                    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW | WS_EX_LAYERED)
+                    user32.SetLayeredWindowAttributes(hwnd, 0, 1, LWA_ALPHA)
+                    user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+                    hidden_hwnds.add(hwnd)
+                return True
+
+            try:
+                user32.EnumWindows(WNDENUMPROC(_cb), 0)
+            except Exception:
+                pass
+            if hidden_hwnds:
+                break
+            import time as _t
+            _t.sleep(0.5)
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 
 def ensure_persistent_sandbox_dirs(custom_root: Optional[Path] = None) -> Path:
@@ -298,9 +381,21 @@ async def run_launcher(args: argparse.Namespace) -> None:
 
         print(f"[LAUNCH] Starting Windows Sandbox: {wsb_exe} \"{wsb_file}\"")
         subprocess.Popen([str(wsb_exe), str(wsb_file)], close_fds=True)
+        if not getattr(args, "visible", False):
+            start_stealth_hide_sandbox_window_thread()
         print("[WAIT] Waiting for Windows Sandbox to boot and announce its Real-Input Agent...")
 
     relay = SandboxWebSocketRelay(endpoint_file, args.host, args.port, token, persistent_dir)
+    start_local_session_http_server(
+        lambda: {
+            "wsUrl": f"ws://{args.host}:{args.port}",
+            "token": token,
+            "mode": "windows_sandbox_real_input",
+            "ready": bool(relay.sandbox_ws_url or relay.read_sandbox_endpoint()),
+            "version": LAUNCHER_VERSION,
+            "persistentDir": str(persistent_dir),
+        }
+    )
     announcer_task = asyncio.create_task(relay.wait_for_sandbox_announcer())
     try:
         async with websockets.serve(
@@ -331,6 +426,7 @@ def main() -> None:
     parser.add_argument("--no-vgpu", action="store_true", help="Disable virtualized GPU (uses software WARP)")
     parser.add_argument("--no-auth", action="store_true")
     parser.add_argument("--relay-only", action="store_true", help="Do not launch WindowsSandbox.exe; only run host relay")
+    parser.add_argument("--visible", action="store_true", help="Keep Windows Sandbox window visible instead of stealth-hidden")
     args = parser.parse_args()
 
     try:

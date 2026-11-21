@@ -1,5 +1,5 @@
 const BRIDGE_CHANNEL = "real-browser-web/v5";
-const EXTENSION_VERSION = "6.2.0";
+const EXTENSION_VERSION = "7.0.1";
 const STORAGE_KEY = "managedBrowserWorkspaces";
 const DEFAULT_DESKTOP_URL = "ws://127.0.0.1:47892";
 
@@ -37,9 +37,19 @@ function startDesktopKeepAlive() {
   }, 20000);
 }
 
-function desktopConnect(url = DEFAULT_DESKTOP_URL, token = "") {
+async function desktopConnect(url = DEFAULT_DESKTOP_URL, token = "") {
   desktopEndpoint = url || DEFAULT_DESKTOP_URL;
   desktopToken = token || "";
+  if (!desktopToken) {
+    try {
+      const resp = await fetch("http://127.0.0.1:47893/session", { cache: "no-store" });
+      if (resp.ok) {
+        const sess = await resp.json();
+        if (sess && sess.token) desktopToken = sess.token;
+        if (!url && sess && sess.wsUrl) desktopEndpoint = sess.wsUrl;
+      }
+    } catch {}
+  }
   if (desktopWs && desktopWs.readyState === WebSocket.OPEN) {
     return desktopCall("status");
   }

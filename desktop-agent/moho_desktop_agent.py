@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-AGENT_VERSION = "7.0.0"
+AGENT_VERSION = "7.0.1"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 47892
 MIN_WIN10_BUILD = 10240
@@ -1769,6 +1769,42 @@ class MohoDesktopAgentServer:
             self.clients.pop(ws, None)
 
 
+
+SESSION_HTTP_PORT = 47893
+
+
+def start_local_session_http_server(ws_url: str, token: str, mode_name: str) -> None:
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.split("?")[0] != "/session":
+                self.send_response(404)
+                self.end_headers()
+                return
+            payload = json.dumps({
+                "wsUrl": ws_url,
+                "token": token,
+                "mode": mode_name,
+                "ready": True,
+                "version": AGENT_VERSION,
+            }).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format, *args):
+            pass
+
+    try:
+        srv = ThreadingHTTPServer(("127.0.0.1", SESSION_HTTP_PORT), Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    except Exception:
+        pass
+
 def save_session_file(port: int, token: str) -> Path:
     base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "MohoDesktopAgent"
     base.mkdir(parents=True, exist_ok=True)
@@ -1798,6 +1834,8 @@ async def run_server(args: argparse.Namespace) -> None:
     )
     session_path = save_session_file(args.port, token)
     mode_name = getattr(server_obj.desktop, "mode_name", "hidden_win32_desktop")
+    if args.host in ("127.0.0.1", "localhost"):
+        start_local_session_http_server(f"ws://{args.host}:{args.port}", token, mode_name)
 
     if getattr(args, "announce_file", None):
         announce_path = Path(args.announce_file)

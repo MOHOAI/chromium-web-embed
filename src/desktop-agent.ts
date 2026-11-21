@@ -663,6 +663,7 @@ export type MohoProtocolAction = keyof typeof MOHO_PROTOCOL_URLS;
 export const MOHO_DOWNLOAD_URLS = {
   extensionZip: "https://raw.githubusercontent.com/MOHOAI/chromium-web-embed/main/extension-download/real-browser-web-bridge-extension.zip",
   desktopAgentZip: "https://raw.githubusercontent.com/MOHOAI/chromium-web-embed/main/desktop-agent-download/moho-desktop-agent-windows.zip",
+  installerBat: "https://raw.githubusercontent.com/MOHOAI/chromium-web-embed/main/desktop-agent-download/Moho-OneClick-Installer.bat",
   repository: "https://github.com/MOHOAI/chromium-web-embed",
   releases: "https://github.com/MOHOAI/chromium-web-embed/releases",
 } as const;
@@ -678,4 +679,30 @@ export function triggerMohoProtocol(action: MohoProtocolAction): string {
     a.remove();
   }
   return uri;
+}
+
+export function launchOrInstallMohoAgent(
+  action: MohoProtocolAction = "startSandbox",
+  fallbackDelayMs = 1800,
+  onFallbackDownload?: (installerUrl: string) => void
+): void {
+  triggerMohoProtocol(action);
+  if (typeof window === "undefined") return;
+  let blurred = false;
+  const onBlur = () => { blurred = true; };
+  window.addEventListener("blur", onBlur, { once: true });
+  window.setTimeout(() => {
+    window.removeEventListener("blur", onBlur);
+    if (!blurred) {
+      const url = MOHO_DOWNLOAD_URLS.installerBat;
+      if (onFallbackDownload) onFallbackDownload(url);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "Moho-OneClick-Installer.bat";
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+  }, fallbackDelayMs);
 }

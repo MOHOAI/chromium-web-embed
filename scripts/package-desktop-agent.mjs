@@ -25,3 +25,5 @@ archive.glob("**/*", {
   ignore: [".venv/**", "__pycache__/**", "_sandbox_bridge/**", "*.pyc"],
 });
 await archive.finalize();
+
+fs.copyFileSync(path.join(agentDir, "Moho-OneClick-Installer.bat"), path.join(outDir, "Moho-OneClick-Installer.bat"));
