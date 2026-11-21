@@ -1,0 +1,1603 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Moho AI Studio — اختبار chromium-web-embed v7.0.2</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+    body {
+      font-family: 'Cairo', 'Inter', system-ui, -apple-system, sans-serif;
+      background: #060b16;
+      color: #f1f5f9;
+    }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; direction: ltr; }
+    .glass {
+      background: rgba(15, 23, 42, 0.78);
+      border: 1px solid rgba(51, 65, 85, 0.7);
+      backdrop-filter: blur(12px);
+    }
+    .tab-btn.active {
+      background: linear-gradient(135deg, #0284c7, #2563eb);
+      color: #ffffff;
+      box-shadow: 0 4px 14px rgba(2, 132, 199, 0.35);
+    }
+    .screen-stage {
+      background: radial-gradient(circle at center, #0f172a 0%, #020617 100%);
+      aspect-ratio: 16 / 9;
+    }
+    .diff-add { background: rgba(16, 185, 129, 0.16); color: #6ee7b7; }
+    .diff-del { background: rgba(239, 68, 68, 0.16); color: #fca5a5; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 999px; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+  <!-- Top Header -->
+  <header class="sticky top-0 z-30 glass border-b border-slate-800/90 px-4 py-3">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-500/20">
+          <i data-lucide="sparkles" class="w-5 h-5 text-white"></i>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-base sm:text-lg font-extrabold text-white tracking-tight">Moho Chromium Web Embed Studio</h1>
+            <span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-500/30 mono">v7.0.2</span>
+          </div>
+          <p class="text-xs text-slate-400">مختبر شامل للتحكم بالمتصفح + سطح مكتب ويندوز 10/11 + جسر الملفات الحقيقي</p>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <button id="btn-mode-toggle" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 flex items-center gap-1.5 transition">
+          <i data-lucide="cpu" class="w-3.5 h-3.5"></i>
+          <span id="mode-label">الوضع: حقيقي (الإضافة)</span>
+        </button>
+        <span id="ext-badge" class="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-slate-300 border border-slate-700 flex items-center gap-1.5">
+          <span id="ext-dot" class="w-2 h-2 rounded-full bg-amber-400"></span>
+          <span id="ext-status-text">جاري فحص الإضافة...</span>
+        </span>
+        <a href="https://raw.githubusercontent.com/MOHOAI/chromium-web-embed/main/extension-download/real-browser-web-bridge-extension.zip" target="_blank" rel="noopener noreferrer"
+           class="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1.5 transition">
+          <i data-lucide="download" class="w-3.5 h-3.5"></i>
+          <span>تحميل الإضافة ZIP</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <nav class="max-w-7xl w-full mx-auto px-4 pt-4">
+    <div class="flex flex-wrap gap-2 p-1.5 rounded-xl bg-slate-900/90 border border-slate-800">
+      <button data-tab="browser" class="tab-btn active flex-1 min-w-[140px] py-2 px-3 rounded-lg text-xs sm:text-sm font-bold text-slate-300 hover:text-white flex items-center justify-center gap-2 transition">
+        <i data-lucide="globe" class="w-4 h-4"></i>
+        <span>التحكم بالمتصفح</span>
+      </button>
+      <button data-tab="desktop" class="tab-btn flex-1 min-w-[140px] py-2 px-3 rounded-lg text-xs sm:text-sm font-bold text-slate-300 hover:text-white flex items-center justify-center gap-2 transition">
+        <i data-lucide="monitor" class="w-4 h-4"></i>
+        <span>ويندوز 10/11 (بث مباشر)</span>
+      </button>
+      <button data-tab="folder" class="tab-btn flex-1 min-w-[140px] py-2 px-3 rounded-lg text-xs sm:text-sm font-bold text-slate-300 hover:text-white flex items-center justify-center gap-2 transition">
+        <i data-lucide="folder-code" class="w-4 h-4"></i>
+        <span>جسر الملفات الحقيقي</span>
+      </button>
+      <button data-tab="terminal" class="tab-btn flex-1 min-w-[140px] py-2 px-3 rounded-lg text-xs sm:text-sm font-bold text-slate-300 hover:text-white flex items-center justify-center gap-2 transition">
+        <i data-lucide="terminal" class="w-4 h-4"></i>
+        <span>الترمنال وتنفيذ الأكواد</span>
+      </button>
+      <button data-tab="downloads" class="tab-btn flex-1 min-w-[140px] py-2 px-3 rounded-lg text-xs sm:text-sm font-bold text-slate-300 hover:text-white flex items-center justify-center gap-2 transition">
+        <i data-lucide="package" class="w-4 h-4"></i>
+        <span>التحميلات والربط</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="max-w-7xl w-full mx-auto px-4 py-4 flex-1">
+
+    <!-- ==================== TAB 1: BROWSER CONTROL ==================== -->
+    <section id="tab-browser" class="tab-panel grid grid-cols-1 lg:grid-cols-12 gap-4">
+      <div class="lg:col-span-8 flex flex-col gap-4">
+        <div class="glass rounded-2xl p-4">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <h2 class="text-sm font-bold text-sky-300 flex items-center gap-2">
+              <i data-lucide="layout-grid" class="w-4 h-4"></i>
+              <span>مساحة عمل المتصفح المعزولة (RealBrowserClient)</span>
+            </h2>
+            <div class="flex flex-wrap gap-2">
+              <button id="btn-ws-create" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-sky-600 hover:bg-sky-500 text-white">إنشاء مساحة عمل</button>
+              <button id="btn-ws-agent" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white">تفعيل تحكم الوكيل</button>
+              <button id="btn-ws-stream" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white">بدء البث المباشر</button>
+              <button id="btn-ws-close" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-rose-600/90 hover:bg-rose-500 text-white">إغلاق المساحة</button>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap gap-2 mb-3">
+            <button id="btn-nav-back" title="رجوع" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs">←</button>
+            <button id="btn-nav-fwd" title="تقدم" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs">→</button>
+            <button id="btn-nav-reload" title="تحديث" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs">↻</button>
+            <input id="browser-url" type="url" value="https://github.com/MOHOAI/chromium-web-embed" placeholder="https://example.com"
+                   class="mono flex-1 min-w-[200px] px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-100 focus:outline-none focus:border-sky-500" />
+            <button id="btn-nav-go" class="px-4 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-bold text-white">فتح الرابط</button>
+          </div>
+
+          <!-- Interactive Live Browser Preview -->
+          <div id="browser-stage" class="screen-stage relative rounded-xl border border-slate-700/80 overflow-hidden flex items-center justify-center">
+            <img id="browser-preview-img" alt="Browser Live Stream" class="hidden w-full h-full object-contain select-none cursor-crosshair" draggable="false" />
+            <canvas id="browser-sim-canvas" width="960" height="540" class="hidden w-full h-full object-contain cursor-crosshair"></canvas>
+            <div id="browser-placeholder" class="text-center p-6">
+              <i data-lucide="tv" class="w-10 h-10 text-slate-600 mx-auto mb-2"></i>
+              <p class="text-sm font-bold text-slate-300">معاينة البث المباشر للتبويب</p>
+              <p class="text-xs text-slate-500 mt-1">اضغط «إنشاء مساحة عمل» ثم «بدء البث المباشر» — أو بدّل إلى «وضع المحاكاة» من الأعلى للتجربة الفورية.</p>
+            </div>
+            <div id="browser-hud" class="absolute top-2 left-2 px-2.5 py-1 rounded-md bg-slate-950/80 border border-slate-700 text-[11px] mono text-sky-300">
+              IDLE | 0 FPS
+            </div>
+          </div>
+
+          <div class="flex flex-wrap gap-2 mt-3">
+            <input id="browser-type-input" type="text" placeholder="اكتب نصًا لإرساله مباشرة إلى التبويب..."
+                   class="flex-1 min-w-[180px] px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-100" />
+            <button id="btn-browser-type" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold">إرسال نص</button>
+            <button id="btn-browser-enter" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold mono">Enter</button>
+            <button id="btn-browser-scroll-down" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold">تمرير ↓</button>
+            <button id="btn-browser-scroll-up" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold">تمرير ↑</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: ARIA / SoM / Diagnostics / WebMCP -->
+      <div class="lg:col-span-4 flex flex-col gap-4">
+        <div class="glass rounded-2xl p-4 flex-1 flex flex-col">
+          <h3 class="text-sm font-bold text-indigo-300 mb-3 flex items-center gap-2">
+            <i data-lucide="scan-eye" class="w-4 h-4"></i>
+            <span>أدوات الذكاء الاصطناعي (v7.0.2)</span>
+          </h3>
+          <div class="grid grid-cols-2 gap-2 mb-3">
+            <button id="btn-aria" class="py-2 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-sky-300">لقطة ARIA YAML</button>
+            <button id="btn-som" class="py-2 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-rose-300">Set-of-Mark مرقّم</button>
+            <button id="btn-diag" class="py-2 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-amber-300">أخطاء Console/Net</button>
+            <button id="btn-webmcp" class="py-2 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-emerald-300">فحص WebMCP</button>
+          </div>
+          <pre id="browser-inspector-out" class="mono flex-1 min-h-[260px] max-h-[380px] overflow-auto p-3 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-slate-300 whitespace-pre-wrap">// اضغط على أي أداة أعلاه لفحص التبويب النشط (ARIA / SoM / Diagnostics / WebMCP)</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TAB 2: WINDOWS 10/11 DESKTOP CONTROL ==================== -->
+    <section id="tab-desktop" class="tab-panel hidden grid grid-cols-1 lg:grid-cols-12 gap-4">
+      <div class="lg:col-span-8 flex flex-col gap-4">
+        <div class="glass rounded-2xl p-4">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <h2 class="text-sm font-bold text-emerald-300 flex items-center gap-2">
+              <i data-lucide="monitor-play" class="w-4 h-4"></i>
+              <span>وسيط التحكم بحاسوب ويندوز 10/11 (سطح مكتب افتراضي + بث مباشر)</span>
+            </h2>
+            <span id="desktop-conn-badge" class="text-[11px] font-bold px-2.5 py-1 rounded-full bg-slate-800 text-slate-400">غير متصل</span>
+          </div>
+
+          <!-- Smart One-Click Launch Bar (Silent + Auto-Installer Fallback + Auto-Token) -->
+          <div class="flex flex-wrap items-center gap-2 mb-3 p-2.5 rounded-xl bg-indigo-950/50 border border-indigo-500/30">
+            <span class="text-xs font-bold text-indigo-300">تشغيل تلقائي صامت بضغطة زر:</span>
+            <button id="btn-smart-sandbox" class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white transition">🚀 تشغيل الحاسوب المعزول</button>
+            <button id="btn-smart-agent" class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-xs font-bold text-white transition">⚡ تشغيل الوسيط الخفيف</button>
+            <button id="btn-smart-workspace" class="px-3 py-1.5 rounded-lg bg-emerald-700/80 hover:bg-emerald-600 text-xs font-bold text-white transition">📂 مجلد الحفظ الدائم</button>
+            <a href="https://raw.githubusercontent.com/MOHOAI/chromium-web-embed/main/desktop-agent-download/Moho-OneClick-Installer.bat" download="Moho-OneClick-Installer.bat" class="px-3 py-1.5 rounded-lg bg-amber-600/90 hover:bg-amber-500 text-xs font-bold text-white transition">⬇️ ملف التثبيت التلقائي</a>
+            <span id="smart-launch-hint" class="text-[11px] text-slate-300 w-full">إذا لم يكن الوسيط مثبتاً لديك بعد، سيقوم الزر تلقائياً بتحميل <code class="mono text-amber-300">Moho-OneClick-Installer.bat</code> لتثبيت بايثون والمكتبات والتشغيل الصامت تلقائياً بدون نسخ أي توكن (Windows Sandbox يتطلب Windows 10/11 Pro/Enterprise/Education).</span>
+          </div>
+
+          <div class="flex flex-wrap gap-2 mb-3">
+            <input id="desktop-token" type="password" placeholder="اختياري — يتم جلب التوكن تلقائياً عبر الإضافة! (اتركه فارغاً واضغط اتصال)"
+                   class="mono flex-1 min-w-[200px] px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-100" />
+            <button id="btn-desktop-connect" class="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white">اتصال + بث مباشر</button>
+            <button id="btn-desktop-disconnect" class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-xs font-bold text-white">قطع</button>
+            <button id="btn-desktop-kill" class="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white flex items-center gap-1">
+              <i data-lucide="octagon-alert" class="w-3.5 h-3.5"></i>
+              <span>إيقاف طارئ</span>
+            </button>
+          </div>
+
+          <!-- Virtual Desktop Actions -->
+          <div class="flex flex-wrap items-center gap-2 mb-3 p-2.5 rounded-xl bg-slate-900/80 border border-slate-800">
+            <span class="text-xs text-slate-400 font-bold">سطح المكتب الافتراضي:</span>
+            <button id="btn-vd-new" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-bold text-white">✨ فتح سطح مكتب جديد وفارغ</button>
+            <button id="btn-vd-left" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold">◀ يسار</button>
+            <button id="btn-vd-right" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold">يمين ▶</button>
+            <button id="btn-vd-close" class="px-2.5 py-1.5 rounded-lg bg-rose-900/70 hover:bg-rose-800 text-rose-200 text-xs font-bold">إغلاق الافتراضي</button>
+            <div class="mr-auto flex items-center gap-2 text-xs text-slate-400">
+              <label for="fps-range">FPS:</label>
+              <input id="fps-range" type="range" min="2" max="24" value="10" class="w-20 accent-sky-500" />
+              <span id="fps-val" class="mono text-sky-300">10</span>
+            </div>
+          </div>
+
+          <!-- Quick App Launcher inside Hidden Desktop -->
+          <div class="flex flex-wrap items-center gap-1.5 mb-3 p-2 rounded-xl bg-slate-900/60 border border-slate-800/80">
+            <button id="btn-win-start" class="px-2.5 py-1 rounded-md bg-sky-700 hover:bg-sky-600 text-[11px] font-bold text-white">⊞ قائمة ابدأ</button>
+            <button id="btn-win-showdesk" class="px-2 py-1 rounded-md bg-slate-700 hover:bg-slate-600 text-[11px] font-bold">🖥️ سطح المكتب</button>
+            <span class="text-[11px] text-slate-400 font-bold ml-1">فتح تطبيق داخل المعزول:</span>
+            <button data-launch-app="explorer.exe" class="launch-app-btn px-2 py-1 rounded-md bg-slate-800 hover:bg-sky-700 text-[11px] font-bold">📁 Explorer</button>
+            <button data-launch-app="msedge.exe" class="launch-app-btn px-2 py-1 rounded-md bg-slate-800 hover:bg-sky-700 text-[11px] font-bold">🌐 Edge</button>
+            <button data-launch-app="cmd.exe" class="launch-app-btn px-2 py-1 rounded-md bg-slate-800 hover:bg-sky-700 text-[11px] font-bold">⬛ CMD</button>
+            <button data-launch-app="powershell.exe" class="launch-app-btn px-2 py-1 rounded-md bg-slate-800 hover:bg-sky-700 text-[11px] font-bold">💙 PowerShell</button>
+            <button data-launch-app="notepad.exe" class="launch-app-btn px-2 py-1 rounded-md bg-slate-800 hover:bg-sky-700 text-[11px] font-bold">📝 Notepad</button>
+            <button data-launch-app="calc.exe" class="launch-app-btn px-2 py-1 rounded-md bg-slate-800 hover:bg-sky-700 text-[11px] font-bold">🧮 Calc</button>
+            <button data-launch-app="mspaint.exe" class="launch-app-btn px-2 py-1 rounded-md bg-slate-800 hover:bg-sky-700 text-[11px] font-bold">🎨 Paint</button>
+            <input id="custom-app-input" type="text" placeholder="أو اكتب اسم برنامج..." class="mono flex-1 min-w-[110px] px-2 py-1 rounded-md bg-slate-950 border border-slate-700 text-[11px]" />
+            <button id="btn-launch-custom-app" class="px-2.5 py-1 rounded-md bg-emerald-700 hover:bg-emerald-600 text-[11px] font-bold text-white">تشغيل</button>
+          </div>
+
+          <!-- Live Desktop Screen Preview -->
+          <div id="desktop-stage" class="screen-stage relative rounded-xl border border-slate-700/80 overflow-hidden flex items-center justify-center">
+            <img id="desktop-preview-img" alt="Windows Virtual Desktop Stream" class="hidden w-full h-full object-contain select-none cursor-crosshair" draggable="false" />
+            <canvas id="desktop-sim-canvas" width="960" height="540" class="hidden w-full h-full object-contain cursor-crosshair"></canvas>
+            <div id="desktop-placeholder" class="text-center p-6">
+              <i data-lucide="monitor-off" class="w-10 h-10 text-slate-600 mx-auto mb-2"></i>
+              <p class="text-sm font-bold text-slate-300">معاينة شاشة ويندوز 10/11 بالبث المباشر</p>
+              <p class="text-xs text-slate-500 mt-1">يدعم النقر اليسار واليمين والمزدوج والوسط والسحب والإفلات والتمرير والكتابة العربية والإنجليزية.</p>
+            </div>
+            <div id="desktop-hud" class="absolute top-2 left-2 px-2.5 py-1 rounded-md bg-slate-950/80 border border-slate-700 text-[11px] mono text-emerald-300">
+              DISCONNECTED
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Mouse, Drag, Keyboard & Win32 Controls -->
+      <div class="lg:col-span-4 flex flex-col gap-4">
+        <div class="glass rounded-2xl p-4">
+          <h3 class="text-sm font-bold text-sky-300 mb-2.5 flex items-center gap-2">
+            <i data-lucide="mouse-pointer-click" class="w-4 h-4"></i>
+            <span>اختبار النقرات والسحب والاختصارات</span>
+          </h3>
+          <div class="grid grid-cols-2 gap-2 mb-3">
+            <button data-desk-act="click" class="desk-quick-btn py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold">نقرة يسار (المنتصف)</button>
+            <button data-desk-act="double_click" class="desk-quick-btn py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold">نقرة مزدوجة</button>
+            <button data-desk-act="right_click" class="desk-quick-btn py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold">نقرة يمين</button>
+            <button data-desk-act="drag_and_drop" class="desk-quick-btn py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold">سحب وإفلات تجريبي</button>
+            <button data-desk-act="hotkey_win_r" class="desk-quick-btn py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold mono">Win + R</button>
+            <button data-desk-act="inspect_controls" class="desk-quick-btn py-1.5 px-2 rounded-lg bg-indigo-700/80 hover:bg-indigo-600 text-xs font-bold">فحص عناصر Win32</button>
+          </div>
+          <div class="flex gap-2 mb-3">
+            <input id="desktop-type-input" type="text" placeholder="نص Unicode (عربي/إنجليزي)..."
+                   class="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs" />
+            <button id="btn-desktop-type" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-bold text-white">كتابة</button>
+          </div>
+          <pre id="desktop-log" class="mono h-56 overflow-auto p-3 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-slate-300 whitespace-pre-wrap">// سجل أوامر وسيط ويندوز 10/11...</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TAB 3: LOCAL FOLDER BRAIN ==================== -->
+    <section id="tab-folder" class="tab-panel hidden grid grid-cols-1 lg:grid-cols-12 gap-4">
+      <div class="lg:col-span-4 flex flex-col gap-4">
+        <div class="glass rounded-2xl p-4 flex flex-col h-full">
+          <div class="flex items-center justify-between gap-2 mb-3">
+            <h2 class="text-sm font-bold text-amber-300 flex items-center gap-2">
+              <i data-lucide="folder-open" class="w-4 h-4"></i>
+              <span>جسر الملفات الحقيقي</span>
+            </h2>
+            <span id="folder-badge" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">غير مرتبط</span>
+          </div>
+
+          <div class="flex flex-wrap gap-2 mb-3">
+            <button id="btn-pick-folder" class="flex-1 py-2 px-3 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-bold text-white flex items-center justify-center gap-1.5">
+              <i data-lucide="hard-drive" class="w-3.5 h-3.5"></i>
+              <span>اختيار مجلد من القرص</span>
+            </button>
+            <button id="btn-load-sample-folder" class="py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-amber-300">
+              مشروع تجريبي
+            </button>
+          </div>
+
+          <div class="flex gap-2 mb-2">
+            <input id="folder-search" type="text" placeholder="بحث داخل ملفات المشروع..."
+                   class="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs" />
+            <button id="btn-watch-folder" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-emerald-300">مراقبة حية</button>
+          </div>
+
+          <div id="folder-tree" class="mono flex-1 min-h-[260px] max-h-[420px] overflow-auto p-2 rounded-xl bg-slate-950 border border-slate-800 text-xs space-y-1">
+            <div class="text-slate-500 p-2 text-center" dir="rtl">اختر مجلد مشروع حقيقي عبر File System Access API أو اضغط «مشروع تجريبي».</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="lg:col-span-8 flex flex-col gap-4">
+        <div class="glass rounded-2xl p-4">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <div class="flex items-center gap-2">
+              <i data-lucide="file-code-2" class="w-4 h-4 text-sky-400"></i>
+              <span id="active-file-label" class="mono text-xs font-bold text-slate-300">لم يتم فتح ملف بعد</span>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button id="btn-ai-suggest-fix" disabled class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-bold text-white">✨ اقتراح إصلاح ذكي</button>
+              <button id="btn-direct-apply" disabled class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-xs font-bold text-white">⚡ تطبيق مباشر على القرص</button>
+              <button id="btn-undo-edit" disabled class="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-xs font-bold text-white">↩ تراجع</button>
+            </div>
+          </div>
+
+          <textarea id="file-editor" rows="12" placeholder="اختر ملفًا من الشجرة لعرضه وتعديله مباشرة..."
+                    class="mono w-full p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-100 focus:outline-none focus:border-sky-500 mb-3"></textarea>
+
+          <div>
+            <div class="text-xs font-bold text-slate-400 mb-1.5">معاينة الفروقات الحية (Unified Diff):</div>
+            <pre id="diff-preview" class="mono max-h-40 overflow-auto p-3 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-slate-400">لا توجد تعديلات غير محفوظة حاليًا.</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TAB 3.5: SANDBOX TERMINAL & CODE RUNNER ==================== -->
+    <section id="tab-terminal" class="tab-panel hidden grid grid-cols-1 lg:grid-cols-12 gap-4">
+      <div class="lg:col-span-5 flex flex-col gap-4">
+        <div class="glass rounded-2xl p-4">
+          <h2 class="text-sm font-bold text-emerald-300 mb-3 flex items-center gap-2">
+            <i data-lucide="shield-check" class="w-4 h-4"></i>
+            <span>بيئة التنفيذ المعزولة (Windows Job Objects + Workspace Jail)</span>
+          </h2>
+          <div class="space-y-2.5">
+            <label class="block text-xs text-slate-400">مسار مجلد المشروع المسموح بالتنفيذ داخله (مرتبط بجسر الملفات):</label>
+            <div class="flex gap-2">
+              <input id="term-workspace" type="text" placeholder="C:\Users\mohoa\Downloads\chromium-web-embed-repo"
+                     class="mono flex-1 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-100" />
+              <button id="btn-term-set-ws" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-bold text-white">تعيين المجلد</button>
+            </div>
+            <button id="btn-term-detect" class="w-full py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-amber-300">
+              🔍 فحص اللغات المثبتة (Python / Node / Git / PowerShell / ...)
+            </button>
+            <div id="term-runtimes" class="mono text-[11px] p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-400">
+              اضغط «فحص اللغات المثبتة» بعد الاتصال بوسيط ويندوز.
+            </div>
+          </div>
+        </div>
+
+        <div class="glass rounded-2xl p-4 flex-1 flex flex-col">
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <h3 class="text-sm font-bold text-indigo-300">تشغيل كود مباشر داخل الساندبوكس</h3>
+            <select id="term-lang" class="mono bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-sky-300">
+              <option value="python">Python (.py)</option>
+              <option value="javascript">Node.js (.js)</option>
+              <option value="typescript">TypeScript (.ts)</option>
+              <option value="powershell">PowerShell (.ps1)</option>
+              <option value="batch">Batch (.bat)</option>
+            </select>
+          </div>
+          <textarea id="term-code" rows="7" class="mono w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-100 mb-2.5">import platform, os
+print("مرحبا من Moho Sandbox Terminal v6.0!")
+print("OS:", platform.platform())
+print("Workspace:", os.getcwd())</textarea>
+          <button id="btn-term-run-code" class="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white">▶ تشغيل الكود في البيئة المعزولة</button>
+        </div>
+      </div>
+
+      <div class="lg:col-span-7 flex flex-col gap-4">
+        <div class="glass rounded-2xl p-4 flex-1 flex flex-col">
+          <div class="flex items-center justify-between gap-2 mb-3">
+            <h2 class="text-sm font-bold text-sky-300 flex items-center gap-2">
+              <i data-lucide="terminal-square" class="w-4 h-4"></i>
+              <span>الترمنال التفاعلي الحي (Live Streaming Output)</span>
+            </h2>
+            <button id="btn-term-clear" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold">مسح</button>
+          </div>
+          <div class="flex gap-2 mb-3">
+            <input id="term-cmd" type="text" placeholder="مثال: python --version أو node -v أو dir"
+                   class="mono flex-1 px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-100" />
+            <button id="btn-term-exec" class="px-4 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-bold text-white">تنفيذ</button>
+          </div>
+          <pre id="term-output" class="mono flex-1 min-h-[340px] max-h-[480px] overflow-auto p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-[11.5px] text-emerald-300 whitespace-pre-wrap">// Moho Sandbox Terminal v7.0.2 — Ready.
+// جميع الأوامر محصورة داخل مجلد المشروع المحدد ومعزولة عبر Windows Job Objects.</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TAB 4: DOWNLOADS & INTEGRATIONS ==================== -->
+    <section id="tab-downloads" class="tab-panel hidden grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="glass rounded-2xl p-5">
+        <h2 class="text-base font-bold text-sky-300 mb-3 flex items-center gap-2">
+          <i data-lucide="download-cloud" class="w-5 h-5"></i>
+          <span>روابط التحميل الرسمية (`MOHOAI/chromium-web-embed v7.0.2`)</span>
+        </h2>
+        <div class="space-y-3">
+          <a href="https://raw.githubusercontent.com/MOHOAI/chromium-web-embed/main/extension-download/real-browser-web-bridge-extension.zip" target="_blank" rel="noopener noreferrer"
+             class="flex items-center justify-between p-3 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 transition">
+            <div>
+              <div class="text-sm font-bold text-white">إضافة متصفح كروم (Moho Browser Workspace v7.0.2)</div>
+              <div class="text-xs text-slate-400">حزمة ZIP جاهزة — فك الضغط وحمّلها في chrome://extensions</div>
+            </div>
+            <span class="px-3 py-1 rounded-lg bg-emerald-600 text-xs font-bold text-white">تحميل ZIP</span>
+          </a>
+
+          <a href="https://raw.githubusercontent.com/MOHOAI/chromium-web-embed/main/desktop-agent-download/moho-desktop-agent-windows.zip" target="_blank" rel="noopener noreferrer"
+             class="flex items-center justify-between p-3 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 transition">
+            <div>
+              <div class="text-sm font-bold text-white">وسيط ويندوز و Windows Sandbox (حزمة ZIP جاهزة v7.0.2)</div>
+              <div class="text-xs text-slate-400">فك الضغط وشغّل setup_one_click.bat مرة واحدة — يتضمن start_sandbox.bat (لنسخ Pro/Enterprise/Education) والحفظ الدائم والتشغيل بضغطة زر</div>
+            </div>
+            <span class="px-3 py-1 rounded-lg bg-sky-600 text-xs font-bold text-white">تحميل ZIP</span>
+          </a>
+
+          <a href="https://github.com/MOHOAI/chromium-web-embed/releases/tag/v7.0.2" target="_blank" rel="noopener noreferrer"
+             class="flex items-center justify-between p-3 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 transition">
+            <div>
+              <div class="text-sm font-bold text-white">المستودع الرسمي وإصدار v7.0.2 على GitHub</div>
+              <div class="text-xs text-slate-400">الكود المصدري الكامل والوثائق والأمثلة</div>
+            </div>
+            <span class="px-3 py-1 rounded-lg bg-indigo-600 text-xs font-bold text-white">GitHub</span>
+          </a>
+
+          <a href="https://github.com/MOHOAI/chromium-web-embed/blob/main/docs/V5_WINDOWS_DESKTOP_AND_LOCAL_BRAIN.md" target="_blank" rel="noopener noreferrer"
+             class="flex items-center justify-between p-3 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 transition">
+            <div>
+              <div class="text-sm font-bold text-white">الدليل العربي الكامل للإصدار الخامس</div>
+              <div class="text-xs text-slate-400">شرح تفصيلي لوسيط ويندوز وجسر الملفات وربط Gemini / Claude / ChatGPT</div>
+            </div>
+            <span class="px-3 py-1 rounded-lg bg-slate-700 text-xs font-bold text-white">قراءة الدليل</span>
+          </a>
+        </div>
+      </div>
+
+      <div class="glass rounded-2xl p-5 flex flex-col">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-base font-bold text-indigo-300 flex items-center gap-2">
+            <i data-lucide="code-2" class="w-5 h-5"></i>
+            <span>مقتطف الربط السريع بمنصات الذكاء الاصطناعي</span>
+          </h2>
+          <button id="btn-copy-snippet" class="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-sky-300">نسخ الكود</button>
+        </div>
+        <pre id="ai-snippet" class="mono flex-1 overflow-auto p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-[11.5px] text-sky-200 leading-relaxed">import {
+  RealBrowserClient,
+  createManagedBrowserAgent,
+  createWindowsDesktopAgent,
+  createLocalFolderBrain,
+  createUnifiedAIToolExecutor,
+  toGeminiFunctionDeclarations,
+  toAnthropicTools,
+  toOpenAITools,
+  registerWithChromeWebMCP,
+} from "chromium-web-embed";
+
+const client = new RealBrowserClient({ label: "Moho AI" });
+await client.connect();
+
+const desktop = createWindowsDesktopAgent({ bridge: client, token: "YOUR_TOKEN" });
+await desktop.connect();
+await desktop.createVirtualDesktop(); // سطح مكتب افتراضي فارغ
+
+const brain = createLocalFolderBrain();
+await brain.pickFolder({ mode: "readwrite" });
+
+const executor = createUnifiedAIToolExecutor({
+  browserAgent: createManagedBrowserAgent(client),
+  desktopAgent: desktop,
+  folderBrain: brain,
+});
+
+// جاهز لـ Gemini / Claude / ChatGPT / MOHO + Chrome WebMCP
+registerWithChromeWebMCP(executor);
+const geminiTools = [{ functionDeclarations: toGeminiFunctionDeclarations() }];
+const claudeTools = toAnthropicTools();
+const openaiTools = toOpenAITools();</pre>
+      </div>
+    </section>
+  </main>
+
+  <!-- In-page Confirmation Modal (No native confirm/alert) -->
+  <div id="confirm-modal" class="hidden fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="glass max-w-lg w-full rounded-2xl p-5 border border-slate-700 shadow-2xl">
+      <h3 class="text-base font-extrabold text-emerald-300 mb-2">⚡ تأكيد التطبيق المباشر على القرص</h3>
+      <p id="confirm-msg" class="text-xs text-slate-300 mb-3"></p>
+      <pre id="confirm-diff" class="mono max-h-48 overflow-auto p-3 rounded-xl bg-slate-950 border border-slate-800 text-[11px] mb-4"></pre>
+      <div class="flex justify-end gap-2">
+        <button id="btn-modal-cancel" class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold">إلغاء</button>
+        <button id="btn-modal-confirm" class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white">تطبيق مباشر الآن</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-box" class="fixed bottom-4 left-4 z-50 space-y-2 max-w-sm"></div>
+
+  <script>
+    (() => {
+      if (window.lucide) window.lucide.createIcons();
+
+      // ============================================================
+      // 1. State & Toast Helpers
+      // ============================================================
+      const CHANNEL = "real-browser-web/v5";
+      const LEGACY_CHANNELS = ["real-browser-web/v4", "real-browser-web/v3"];
+      const state = {
+        simulationMode: false,
+        extensionConnected: false,
+        workspaceId: null,
+        agentControlEnabled: false,
+        browserStreaming: false,
+        browserStreamTimer: null,
+        lastBrowserShot: null,
+        desktopConnected: false,
+        desktopStreaming: false,
+        desktopSimTimer: null,
+        desktopVirtualActive: false,
+        lastDesktopFrame: null,
+        desktopDragging: false,
+        folderMode: "none", // "real" | "sample" | "none"
+        rootHandle: null,
+        fileHandles: new Map(),
+        sampleFiles: new Map(),
+        activeFile: null,
+        originalContent: "",
+        undoStack: [],
+        fsObserver: null,
+      };
+
+      const pendingBridge = new Map();
+
+      function toast(msg, kind = "info") {
+        const box = document.getElementById("toast-box");
+        const el = document.createElement("div");
+        const colors = {
+          ok: "bg-emerald-950/95 border-emerald-500/50 text-emerald-200",
+          err: "bg-rose-950/95 border-rose-500/50 text-rose-200",
+          warn: "bg-amber-950/95 border-amber-500/50 text-amber-200",
+          info: "bg-slate-900/95 border-sky-500/50 text-sky-200",
+        };
+        el.className = `px-3.5 py-2.5 rounded-xl border text-xs font-semibold shadow-xl transition ${colors[kind] || colors.info}`;
+        el.textContent = msg;
+        box.appendChild(el);
+        setTimeout(() => el.remove(), 3600);
+      }
+
+      // ============================================================
+      // 2. Tabs & Mode Toggle
+      // ============================================================
+      document.querySelectorAll(".tab-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+          btn.classList.add("active");
+          const target = btn.dataset.tab;
+          document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
+          document.getElementById(`tab-${target}`).classList.remove("hidden");
+        });
+      });
+
+      const modeLabel = document.getElementById("mode-label");
+      document.getElementById("btn-mode-toggle").addEventListener("click", () => {
+        state.simulationMode = !state.simulationMode;
+        modeLabel.textContent = state.simulationMode
+          ? "الوضع: محاكاة تفاعلية (Demo)"
+          : "الوضع: حقيقي (الإضافة)";
+        toast(
+          state.simulationMode
+            ? "تم تفعيل وضع المحاكاة التفاعلية لاختبار الواجهة فورًا."
+            : "تم العودة إلى الوضع الحقيقي (الاتصال بإضافة كروم).",
+          "info"
+        );
+        if (!state.simulationMode) checkExtensionStatus();
+        else setExtBadge(true, "وضع المحاكاة نشط");
+      });
+
+      function setExtBadge(ok, text) {
+        const dot = document.getElementById("ext-dot");
+        const label = document.getElementById("ext-status-text");
+        dot.className = `w-2 h-2 rounded-full ${ok ? "bg-emerald-400" : "bg-amber-400"}`;
+        label.textContent = text;
+      }
+
+      // ============================================================
+      // 3. RealBrowserClient Bridge Protocol (real-browser-web/v5)
+      // ============================================================
+      window.addEventListener("message", (ev) => {
+        if (ev.source !== window || !ev.data || typeof ev.data !== "object") return;
+        const msg = ev.data;
+        if (msg.channel !== CHANNEL && !LEGACY_CHANNELS.includes(msg.channel)) return;
+
+        if (msg.event && msg.event.type === "desktop.frame" && msg.event.payload) {
+          renderDesktopRealFrame(msg.event.payload);
+          return;
+        }
+        if (msg.event && msg.event.type === "terminal.output" && msg.event.payload) {
+          const out = document.getElementById("term-output");
+          if (out) {
+            out.textContent += msg.event.payload.chunk || "";
+            out.scrollTop = out.scrollHeight;
+          }
+          return;
+        }
+        if (typeof msg.ok !== "boolean") return;
+        if (typeof msg.id === "string" && pendingBridge.has(msg.id)) {
+          const entry = pendingBridge.get(msg.id);
+          pendingBridge.delete(msg.id);
+          clearTimeout(entry.timer);
+          if (msg.ok) entry.resolve(msg.data);
+          else entry.reject(new Error(msg.error || "Bridge error"));
+        }
+      });
+
+      function bridgeRequest(action, payload = {}, timeoutMs = 8000) {
+        const id = "moho_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            pendingBridge.delete(id);
+            reject(new Error("انتهت مهلة استجابة الإضافة — تأكد من تثبيت Moho Browser Workspace v7.0.2 أو فعّل وضع المحاكاة."));
+          }, timeoutMs);
+          pendingBridge.set(id, { resolve, reject, timer });
+          window.postMessage(
+            {
+              channel: CHANNEL,
+              id,
+              action,
+              payload: { ...(state.workspaceId ? { workspaceId: state.workspaceId } : {}), ...payload },
+            },
+            "*"
+          );
+        });
+      }
+
+      async function checkExtensionStatus() {
+        try {
+          const st = await bridgeRequest("status", {}, 1500);
+          state.extensionConnected = Boolean(st?.installed);
+          if (state.extensionConnected) {
+            await bridgeRequest("subscribe").catch(() => {});
+            setExtBadge(true, `الإضافة متصلة v${st.version || "5.1.0"}`);
+          }
+        } catch {
+          state.extensionConnected = false;
+          setExtBadge(false, "الإضافة غير مكتشفة (فعّل المحاكاة)");
+        }
+      }
+
+      // ============================================================
+      // 4. Browser Workspace Controls & Simulation Canvas
+      // ============================================================
+      const browserImg = document.getElementById("browser-preview-img");
+      const browserCanvas = document.getElementById("browser-sim-canvas");
+      const browserPlaceholder = document.getElementById("browser-placeholder");
+      const browserHud = document.getElementById("browser-hud");
+      const browserOut = document.getElementById("browser-inspector-out");
+      const browserUrlInput = document.getElementById("browser-url");
+
+      function drawSimBrowser(lastClick = null, showSoM = false) {
+        const ctx = browserCanvas.getContext("2d");
+        const w = browserCanvas.width, h = browserCanvas.height;
+        ctx.fillStyle = "#0b1220";
+        ctx.fillRect(0, 0, w, h);
+        // Browser chrome bar
+        ctx.fillStyle = "#1e293b";
+        ctx.fillRect(0, 0, w, 44);
+        ctx.fillStyle = "#0f172a";
+        ctx.fillRect(100, 9, w - 140, 26);
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "13px monospace";
+        ctx.fillText(browserUrlInput.value || "https://github.com/MOHOAI", 112, 27);
+        // Hero card
+        ctx.fillStyle = "#111c33";
+        ctx.fillRect(60, 80, w - 120, 180);
+        ctx.strokeStyle = "#38bdf8";
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(60, 80, w - 120, 180);
+        ctx.fillStyle = "#f8fafc";
+        ctx.font = "bold 24px sans-serif";
+        ctx.fillText("MOHOAI / chromium-web-embed v7.0.2", 90, 140);
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "15px sans-serif";
+        ctx.fillText("Live Isolated Browser Workspace — Interactive Preview", 90, 178);
+        // Mock buttons
+        const btns = [
+          { x: 90, y: 205, bw: 150, bh: 36, label: "Star Repository", color: "#0284c7" },
+          { x: 260, y: 205, bw: 170, bh: 36, label: "Download Extension", color: "#059669" },
+          { x: 450, y: 205, bw: 150, bh: 36, label: "Inspect ARIA", color: "#4f46e5" },
+        ];
+        btns.forEach((b, i) => {
+          ctx.fillStyle = b.color;
+          ctx.fillRect(b.x, b.y, b.bw, b.bh);
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "bold 13px sans-serif";
+          ctx.fillText(b.label, b.x + 14, b.y + 23);
+          if (showSoM) {
+            ctx.strokeStyle = "#f43f5e";
+            ctx.lineWidth = 2.5;
+            ctx.strokeRect(b.x - 2, b.y - 2, b.bw + 4, b.bh + 4);
+            ctx.fillStyle = "#f43f5e";
+            ctx.fillRect(b.x - 2, b.y - 20, 22, 18);
+            ctx.fillStyle = "#fff";
+            ctx.font = "bold 12px monospace";
+            ctx.fillText(String(i), b.x + 5, b.y - 6);
+          }
+        });
+        if (lastClick) {
+          ctx.beginPath();
+          ctx.arc(lastClick.x, lastClick.y, 12, 0, Math.PI * 2);
+          ctx.strokeStyle = "#38bdf8";
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+      }
+
+      document.getElementById("btn-ws-create").addEventListener("click", async () => {
+        if (state.simulationMode) {
+          state.workspaceId = "sim_ws_01";
+          browserPlaceholder.classList.add("hidden");
+          browserImg.classList.add("hidden");
+          browserCanvas.classList.remove("hidden");
+          drawSimBrowser();
+          browserHud.textContent = "SIM WORKSPACE ACTIVE | 10 FPS";
+          toast("تم إنشاء مساحة عمل محاكاة بنجاح.", "ok");
+          return;
+        }
+        try {
+          const ws = await bridgeRequest("workspaceCreate", {
+            url: browserUrlInput.value,
+            label: "Moho AI Test Workspace",
+            agentControlEnabled: true,
+          });
+          state.workspaceId = ws.id;
+          state.agentControlEnabled = Boolean(ws.agentControlEnabled);
+          browserHud.textContent = `WORKSPACE ${ws.id} | READY`;
+          toast("تم إنشاء مساحة عمل المتصفح المعزولة بنجاح.", "ok");
+        } catch (err) {
+          toast(err.message, "err");
+        }
+      });
+
+      document.getElementById("btn-ws-agent").addEventListener("click", async () => {
+        state.agentControlEnabled = !state.agentControlEnabled;
+        if (state.simulationMode) {
+          toast(`تحكم الوكيل (محاكاة): ${state.agentControlEnabled ? "مفعّل" : "معطّل"}`, "ok");
+          return;
+        }
+        try {
+          await bridgeRequest("workspaceSetAgentControl", { enabled: state.agentControlEnabled });
+          toast(`تم ${state.agentControlEnabled ? "تفعيل" : "تعطيل"} تحكم الوكيل.`, "ok");
+        } catch (err) { toast(err.message, "err"); }
+      });
+
+      document.getElementById("btn-ws-stream").addEventListener("click", () => {
+        const btn = document.getElementById("btn-ws-stream");
+        if (state.browserStreaming) {
+          clearInterval(state.browserStreamTimer);
+          state.browserStreaming = false;
+          btn.textContent = "بدء البث المباشر";
+          browserHud.textContent = "STREAM PAUSED";
+          return;
+        }
+        state.browserStreaming = true;
+        btn.textContent = "إيقاف البث";
+        if (state.simulationMode) {
+          browserPlaceholder.classList.add("hidden");
+          browserCanvas.classList.remove("hidden");
+          drawSimBrowser();
+          browserHud.textContent = "LIVE SIM STREAM | 10 FPS";
+          return;
+        }
+        browserPlaceholder.classList.add("hidden");
+        browserCanvas.classList.add("hidden");
+        browserImg.classList.remove("hidden");
+        const tick = async () => {
+          try {
+            const shot = await bridgeRequest("workspaceScreenshot", { format: "jpeg", quality: 72 });
+            state.lastBrowserShot = shot;
+            browserImg.src = shot.dataUrl;
+            browserHud.textContent = `LIVE WINDOW | ${shot.width}x${shot.height}`;
+          } catch (err) {
+            browserHud.textContent = `ERR: ${err.message.slice(0, 60)}`;
+          }
+        };
+        tick();
+        state.browserStreamTimer = setInterval(tick, 320);
+      });
+
+      document.getElementById("btn-ws-close").addEventListener("click", async () => {
+        clearInterval(state.browserStreamTimer);
+        state.browserStreaming = false;
+        document.getElementById("btn-ws-stream").textContent = "بدء البث المباشر";
+        if (!state.simulationMode && state.workspaceId) {
+          await bridgeRequest("workspaceClose").catch(() => {});
+        }
+        state.workspaceId = null;
+        browserImg.classList.add("hidden");
+        browserCanvas.classList.add("hidden");
+        browserPlaceholder.classList.remove("hidden");
+        browserHud.textContent = "CLOSED";
+        toast("تم إغلاق مساحة العمل.", "info");
+      });
+
+      document.getElementById("btn-nav-go").addEventListener("click", async () => {
+        if (state.simulationMode) { drawSimBrowser(); toast("تم الانتقال إلى الرابط (محاكاة).", "ok"); return; }
+        try { await bridgeRequest("workspaceNavigate", { url: browserUrlInput.value }); toast("تم فتح الرابط.", "ok"); }
+        catch (err) { toast(err.message, "err"); }
+      });
+      document.getElementById("btn-nav-back").addEventListener("click", () => !state.simulationMode && bridgeRequest("workspaceBack").catch((e) => toast(e.message, "err")));
+      document.getElementById("btn-nav-fwd").addEventListener("click", () => !state.simulationMode && bridgeRequest("workspaceForward").catch((e) => toast(e.message, "err")));
+      document.getElementById("btn-nav-reload").addEventListener("click", () => !state.simulationMode && bridgeRequest("workspaceReload").catch((e) => toast(e.message, "err")));
+
+      document.getElementById("btn-browser-type").addEventListener("click", async () => {
+        const text = document.getElementById("browser-type-input").value;
+        if (!text) return;
+        if (state.simulationMode) { toast(`تمت كتابة: ${text}`, "ok"); return; }
+        try { await bridgeRequest("workspaceInput", { input: { type: "text", text } }); toast("تم إرسال النص.", "ok"); }
+        catch (err) { toast(err.message, "err"); }
+      });
+      document.getElementById("btn-browser-enter").addEventListener("click", () => !state.simulationMode && bridgeRequest("workspaceInput", { input: { type: "key", action: "press", key: "Enter" } }).catch((e) => toast(e.message, "err")));
+      document.getElementById("btn-browser-scroll-down").addEventListener("click", () => !state.simulationMode && bridgeRequest("workspaceInput", { input: { type: "wheel", x: 400, y: 300, deltaY: 360 } }).catch((e) => toast(e.message, "err")));
+      document.getElementById("btn-browser-scroll-up").addEventListener("click", () => !state.simulationMode && bridgeRequest("workspaceInput", { input: { type: "wheel", x: 400, y: 300, deltaY: -360 } }).catch((e) => toast(e.message, "err")));
+
+      // Interactive clicks on Browser preview
+      function mapContainCoords(el, natW, natH, e) {
+        const r = el.getBoundingClientRect();
+        const ia = natW / Math.max(1, natH), ba = r.width / r.height;
+        let rw = r.width, rh = r.height, ox = 0, oy = 0;
+        if (ia > ba) { rh = r.width / ia; oy = (r.height - rh) / 2; }
+        else { rw = r.height * ia; ox = (r.width - rw) / 2; }
+        const rx = (e.clientX - r.left - ox) / rw, ry = (e.clientY - r.top - oy) / rh;
+        if (rx < 0 || rx > 1 || ry < 0 || ry > 1) return null;
+        return { x: Math.round(rx * natW), y: Math.round(ry * natH) };
+      }
+
+      browserImg.tabIndex = 0;
+      browserImg.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        if (!state.lastBrowserShot) return;
+        const pt = mapContainCoords(browserImg, state.lastBrowserShot.width, state.lastBrowserShot.height, e);
+        if (pt) {
+          browserHud.textContent = `RIGHT CLICK (${pt.x}, ${pt.y})`;
+          bridgeRequest("workspaceInput", { input: { type: "pointer", action: "rightclick", x: pt.x, y: pt.y, button: "right" } }).catch((err) => toast(err.message, "err"));
+        }
+      });
+      browserImg.addEventListener("click", (e) => {
+        browserImg.focus();
+        if (!state.lastBrowserShot) return;
+        const pt = mapContainCoords(browserImg, state.lastBrowserShot.width, state.lastBrowserShot.height, e);
+        if (pt) {
+          browserHud.textContent = `CLICK (${pt.x}, ${pt.y})`;
+          bridgeRequest("workspaceInput", { input: { type: "pointer", action: "click", x: pt.x, y: pt.y, button: "left" } }).catch((err) => toast(err.message, "err"));
+        }
+      });
+      browserImg.addEventListener("dblclick", (e) => {
+        if (!state.lastBrowserShot) return;
+        const pt = mapContainCoords(browserImg, state.lastBrowserShot.width, state.lastBrowserShot.height, e);
+        if (pt) {
+          browserHud.textContent = `DBLCLICK (${pt.x}, ${pt.y})`;
+          bridgeRequest("workspaceInput", { input: { type: "pointer", action: "dblclick", x: pt.x, y: pt.y, button: "left" } }).catch((err) => toast(err.message, "err"));
+        }
+      });
+      browserImg.addEventListener("wheel", (e) => {
+        if (!state.lastBrowserShot) return;
+        e.preventDefault();
+        const pt = mapContainCoords(browserImg, state.lastBrowserShot.width, state.lastBrowserShot.height, e);
+        if (pt) {
+          bridgeRequest("workspaceInput", { input: { type: "wheel", x: pt.x, y: pt.y, deltaX: Math.round(e.deltaX), deltaY: Math.round(e.deltaY) } }).catch((err) => toast(err.message, "err"));
+        }
+      }, { passive: false });
+      browserImg.addEventListener("keydown", (e) => {
+        if (!state.lastBrowserShot) return;
+        e.preventDefault();
+        const input = e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey
+          ? { type: "text", text: e.key }
+          : { type: "key", action: "press", key: e.key };
+        bridgeRequest("workspaceInput", { input }).catch((err) => toast(err.message, "err"));
+      });
+      browserCanvas.addEventListener("click", (e) => {
+        const pt = mapContainCoords(browserCanvas, browserCanvas.width, browserCanvas.height, e);
+        if (pt) { drawSimBrowser(pt); browserHud.textContent = `SIM CLICK (${pt.x}, ${pt.y})`; }
+      });
+
+      // Inspector buttons (ARIA / SoM / Diagnostics / WebMCP)
+      document.getElementById("btn-aria").addEventListener("click", async () => {
+        if (state.simulationMode) {
+          browserOut.textContent = `- document "MOHOAI/chromium-web-embed" [url=${browserUrlInput.value}]\n  - heading "MOHOAI / chromium-web-embed v7.0.2" [ref=e0]\n  - button "Star Repository" [ref=e1]\n  - button "Download Extension" [ref=e2]\n  - button "Inspect ARIA" [ref=e3]`;
+          return;
+        }
+        try {
+          const res = await bridgeRequest("workspaceAriaSnapshot");
+          browserOut.textContent = res.yaml || "(فارغ)";
+        } catch (err) { browserOut.textContent = "خطأ: " + err.message; }
+      });
+
+      document.getElementById("btn-som").addEventListener("click", async () => {
+        if (state.simulationMode) {
+          browserPlaceholder.classList.add("hidden");
+          browserCanvas.classList.remove("hidden");
+          drawSimBrowser(null, true);
+          browserOut.textContent = "// Set-of-Mark Overlay rendered on preview:\n[0] Star Repository\n[1] Download Extension\n[2] Inspect ARIA";
+          return;
+        }
+        try {
+          const res = await bridgeRequest("workspaceAnnotatedScreenshot");
+          if (res.screenshot?.dataUrl) {
+            browserPlaceholder.classList.add("hidden");
+            browserCanvas.classList.add("hidden");
+            browserImg.classList.remove("hidden");
+            browserImg.src = res.screenshot.dataUrl;
+          }
+          browserOut.textContent = JSON.stringify(res.elements?.slice(0, 25) || [], null, 2);
+        } catch (err) { browserOut.textContent = "خطأ: " + err.message; }
+      });
+
+      document.getElementById("btn-diag").addEventListener("click", async () => {
+        if (state.simulationMode) {
+          browserOut.textContent = JSON.stringify({ consoleErrors: [], networkErrors: [], note: "0 errors in simulation mode" }, null, 2);
+          return;
+        }
+        try {
+          const res = await bridgeRequest("workspaceDiagnostics");
+          browserOut.textContent = JSON.stringify(res, null, 2);
+        } catch (err) { browserOut.textContent = "خطأ: " + err.message; }
+      });
+
+      document.getElementById("btn-webmcp").addEventListener("click", () => {
+        const supported = Boolean(document.modelContext && typeof document.modelContext.registerTool === "function");
+        const forms = Array.from(document.querySelectorAll("form[toolname]")).map((f) => f.getAttribute("toolname"));
+        browserOut.textContent = JSON.stringify({
+          chromeWebMCPSupported: supported,
+          flagHint: "chrome://flags/#enable-webmcp-testing",
+          declarativeFormsOnPage: forms,
+        }, null, 2);
+      });
+
+      // ============================================================
+      // 5. Windows 10/11 Virtual Desktop Live Preview & Actions
+      // ============================================================
+      const desktopImg = document.getElementById("desktop-preview-img");
+      const desktopCanvas = document.getElementById("desktop-sim-canvas");
+      const desktopPlaceholder = document.getElementById("desktop-placeholder");
+      const desktopHud = document.getElementById("desktop-hud");
+      const desktopLogEl = document.getElementById("desktop-log");
+      const desktopBadge = document.getElementById("desktop-conn-badge");
+      const fpsRange = document.getElementById("fps-range");
+      const fpsVal = document.getElementById("fps-val");
+
+      fpsRange.addEventListener("input", () => { fpsVal.textContent = fpsRange.value; });
+
+      function logDesktop(msg) {
+        const ts = new Date().toLocaleTimeString("en-GB");
+        desktopLogEl.textContent = `[${ts}] ${msg}\n` + desktopLogEl.textContent;
+      }
+
+      function renderDesktopRealFrame(frame) {
+        state.lastDesktopFrame = frame;
+        desktopPlaceholder.classList.add("hidden");
+        desktopCanvas.classList.add("hidden");
+        desktopImg.classList.remove("hidden");
+        desktopImg.src = frame.dataUrl;
+        desktopHud.textContent = `${frame.mode === "windows_sandbox_real_input" ? "WINDOWS SANDBOX LIVE" : "WIN 10/11 LIVE"} | ${frame.screenWidth}x${frame.screenHeight}`;
+      }
+
+      const simWindowBox = { x: 180, y: 95, w: 460, h: 280 };
+      function drawSimDesktop(cursor = null) {
+        const ctx = desktopCanvas.getContext("2d");
+        const w = desktopCanvas.width, h = desktopCanvas.height;
+        const grad = ctx.createLinearGradient(0, 0, w, h);
+        grad.addColorStop(0, state.desktopVirtualActive ? "#0b1936" : "#10203a");
+        grad.addColorStop(1, "#020617");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, w, h);
+
+        // Label
+        ctx.fillStyle = "#38bdf8";
+        ctx.font = "bold 15px sans-serif";
+        ctx.fillText(
+          state.desktopVirtualActive ? "Windows 11 — Isolated Empty Virtual Desktop #2" : "Windows 11 — Primary Desktop",
+          24,
+          36
+        );
+
+        if (state.desktopVirtualActive) {
+          // Draggable mock window
+          ctx.fillStyle = "#111827";
+          ctx.fillRect(simWindowBox.x, simWindowBox.y, simWindowBox.w, simWindowBox.h);
+          ctx.strokeStyle = "#38bdf8";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(simWindowBox.x, simWindowBox.y, simWindowBox.w, simWindowBox.h);
+          ctx.fillStyle = "#1e293b";
+          ctx.fillRect(simWindowBox.x, simWindowBox.y, simWindowBox.w, 34);
+          ctx.fillStyle = "#f8fafc";
+          ctx.font = "bold 13px sans-serif";
+          ctx.fillText("Moho AI Isolated Workspace App (Drag me!)", simWindowBox.x + 12, simWindowBox.y + 22);
+          ctx.fillStyle = "#94a3b8";
+          ctx.font = "13px monospace";
+          ctx.fillText("Win32 SendInput Ready: Click / Drag / Unicode", simWindowBox.x + 16, simWindowBox.y + 82);
+        }
+
+        // Windows 11 centered taskbar
+        ctx.fillStyle = "rgba(15, 23, 42, 0.92)";
+        ctx.fillRect(0, h - 42, w, 42);
+        ctx.fillStyle = "#38bdf8";
+        ctx.fillRect(w / 2 - 14, h - 31, 20, 20);
+        if (cursor) {
+          ctx.beginPath();
+          ctx.arc(cursor.x, cursor.y, 9, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(56, 189, 248, 0.65)";
+          ctx.fill();
+        }
+      }
+
+      document.getElementById("btn-desktop-connect").addEventListener("click", async () => {
+        if (state.simulationMode) {
+          state.desktopConnected = true;
+          desktopBadge.textContent = "متصل (محاكاة Windows 11)";
+          desktopBadge.className = "text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-900/80 text-emerald-300";
+          desktopPlaceholder.classList.add("hidden");
+          desktopImg.classList.add("hidden");
+          desktopCanvas.classList.remove("hidden");
+          drawSimDesktop();
+          desktopHud.textContent = `WIN 11 SIM | ${fpsRange.value} FPS`;
+          logDesktop("Connected to simulated Windows 11 Desktop Agent.");
+          toast("تم الاتصال بوسيط ويندوز (وضع المحاكاة).", "ok");
+          return;
+        }
+        try {
+          await bridgeRequest("subscribe");
+          const token = document.getElementById("desktop-token").value.trim();
+          const st = await bridgeRequest("desktopConnect", { token });
+          await bridgeRequest("desktopStartStream", { fps: Number(fpsRange.value), quality: 70, maxWidth: 1280 });
+          state.desktopConnected = true;
+          desktopBadge.textContent = `متصل (${st.os || "Windows 10/11"})`;
+          desktopBadge.className = "text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-900/80 text-emerald-300";
+          logDesktop(`Connected via extension to ${st.os} (${st.screen?.width}x${st.screen?.height})`);
+          toast("تم الاتصال بوسيط ويندوز وبدء البث المباشر.", "ok");
+        } catch (err) {
+          logDesktop("ERROR: " + err.message);
+          toast(err.message, "err");
+        }
+      });
+
+      document.getElementById("btn-desktop-disconnect").addEventListener("click", async () => {
+        if (!state.simulationMode) await bridgeRequest("desktopDisconnect").catch(() => {});
+        state.desktopConnected = false;
+        desktopBadge.textContent = "غير متصل";
+        desktopBadge.className = "text-[11px] font-bold px-2.5 py-1 rounded-full bg-slate-800 text-slate-400";
+        desktopImg.classList.add("hidden");
+        desktopCanvas.classList.add("hidden");
+        desktopPlaceholder.classList.remove("hidden");
+        desktopHud.textContent = "DISCONNECTED";
+        logDesktop("Disconnected from Windows Desktop Agent.");
+      });
+
+      document.getElementById("btn-desktop-kill").addEventListener("click", async () => {
+        if (!state.simulationMode) await bridgeRequest("desktopEmergencyStop", { closeVirtualDesktop: false }).catch(() => {});
+        desktopHud.textContent = "EMERGENCY STOPPED";
+        logDesktop("EMERGENCY KILL SWITCH ACTIVATED!");
+        toast("تم تفعيل الإيقاف الطارئ للوسيط.", "warn");
+      });
+
+      async function desktopExec(action, payload = {}) {
+        if (state.simulationMode) {
+          if (action === "create_virtual_desktop") state.desktopVirtualActive = true;
+          if (action === "close_virtual_desktop") state.desktopVirtualActive = false;
+          if (action === "drag_and_drop") { simWindowBox.x = 340; simWindowBox.y = 135; }
+          drawSimDesktop();
+          logDesktop(`SIM -> ${action} ${JSON.stringify(payload)}`);
+          return;
+        }
+        try {
+          const res = await bridgeRequest("desktopExecute", { action, payload });
+          logDesktop(`OK -> ${action}: ${JSON.stringify(res).slice(0, 180)}`);
+        } catch (err) {
+          logDesktop(`ERR -> ${action}: ${err.message}`);
+          toast(err.message, "err");
+        }
+      }
+
+      document.getElementById("btn-vd-new").addEventListener("click", () => desktopExec("create_virtual_desktop"));
+      document.getElementById("btn-vd-left").addEventListener("click", () => desktopExec("switch_virtual_desktop", { direction: "left" }));
+      document.getElementById("btn-vd-right").addEventListener("click", () => desktopExec("switch_virtual_desktop", { direction: "right" }));
+      document.getElementById("btn-vd-close").addEventListener("click", () => desktopExec("close_virtual_desktop"));
+
+      document.querySelectorAll(".desk-quick-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const act = btn.dataset.deskAct;
+          if (act === "hotkey_win_r") return desktopExec("hotkey", { keys: ["win", "r"] });
+          if (act === "inspect_controls") return desktopExec("inspect_window_controls", { maxControls: 30 });
+          if (act === "drag_and_drop") return desktopExec("drag_and_drop", { startX: 300, startY: 300, endX: 600, endY: 420, coordinateSpace: "normalized_1000" });
+          desktopExec(act, { x: 500, y: 500, coordinateSpace: "normalized_1000" });
+        });
+      });
+
+      document.getElementById("btn-desktop-type").addEventListener("click", () => {
+        const text = document.getElementById("desktop-type-input").value;
+        if (text) desktopExec("type", { text });
+      });
+
+      // Live Mouse + Drag on Desktop Preview (Real & Sim)
+      desktopImg.addEventListener("contextmenu", (e) => e.preventDefault());
+      desktopImg.addEventListener("mousedown", (e) => {
+        if (!state.lastDesktopFrame) return;
+        const pt = mapContainCoords(desktopImg, state.lastDesktopFrame.screenWidth, state.lastDesktopFrame.screenHeight, e);
+        if (!pt) return;
+        state.desktopDragging = true;
+        const button = e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
+        desktopExec("mouse_down", { x: pt.x, y: pt.y, button });
+      });
+      window.addEventListener("mousemove", (e) => {
+        if (!state.desktopDragging || !state.lastDesktopFrame) return;
+        const pt = mapContainCoords(desktopImg, state.lastDesktopFrame.screenWidth, state.lastDesktopFrame.screenHeight, e);
+        if (pt) bridgeRequest("desktopExecute", { action: "move", payload: pt }).catch(() => {});
+      });
+      window.addEventListener("mouseup", (e) => {
+        if (!state.desktopDragging) return;
+        state.desktopDragging = false;
+        if (!state.lastDesktopFrame) return;
+        const pt = mapContainCoords(desktopImg, state.lastDesktopFrame.screenWidth, state.lastDesktopFrame.screenHeight, e);
+        const button = e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
+        if (pt) desktopExec("mouse_up", { x: pt.x, y: pt.y, button });
+      });
+      desktopImg.tabIndex = 0;
+      desktopImg.addEventListener("dblclick", (e) => {
+        if (!state.lastDesktopFrame) return;
+        const pt = mapContainCoords(desktopImg, state.lastDesktopFrame.screenWidth, state.lastDesktopFrame.screenHeight, e);
+        if (pt) desktopExec("double_click", pt);
+      });
+      desktopImg.addEventListener("wheel", (e) => {
+        if (!state.lastDesktopFrame) return;
+        e.preventDefault();
+        const pt = mapContainCoords(desktopImg, state.lastDesktopFrame.screenWidth, state.lastDesktopFrame.screenHeight, e);
+        if (pt) desktopExec("scroll", { x: pt.x, y: pt.y, deltaX: Math.round(e.deltaX), deltaY: Math.round(e.deltaY) });
+      }, { passive: false });
+      desktopImg.addEventListener("keydown", (e) => {
+        if (!state.lastDesktopFrame) return;
+        e.preventDefault();
+        if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+          desktopExec("type", { text: e.key });
+        } else {
+          desktopExec("press_key", { key: e.key });
+        }
+      });
+
+      document.querySelectorAll(".launch-app-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const cmd = btn.dataset.launchApp;
+          if (cmd) desktopExec("launch_app", { command: cmd });
+        });
+      });
+      document.getElementById("btn-win-start").addEventListener("click", () => desktopExec("open_start_menu"));
+      document.getElementById("btn-win-showdesk").addEventListener("click", () => desktopExec("show_desktop"));
+      document.getElementById("btn-launch-custom-app").addEventListener("click", () => {
+        const cmd = document.getElementById("custom-app-input").value.trim();
+        if (cmd) desktopExec("launch_app", { command: cmd });
+      });
+      desktopCanvas.addEventListener("click", (e) => {
+        const pt = mapContainCoords(desktopCanvas, desktopCanvas.width, desktopCanvas.height, e);
+        if (pt) { drawSimDesktop(pt); logDesktop(`SIM CLICK (${pt.x}, ${pt.y})`); }
+      });
+
+      // ============================================================
+      // 6. Local Folder Brain (File System Access API + Sample Mode)
+      // ============================================================
+      const folderTreeEl = document.getElementById("folder-tree");
+      const folderBadge = document.getElementById("folder-badge");
+      const fileEditor = document.getElementById("file-editor");
+      const activeFileLabel = document.getElementById("active-file-label");
+      const diffPreview = document.getElementById("diff-preview");
+      const btnApply = document.getElementById("btn-direct-apply");
+      const btnUndo = document.getElementById("btn-undo-edit");
+      const btnSuggest = document.getElementById("btn-ai-suggest-fix");
+      const searchInput = document.getElementById("folder-search");
+
+      function computeDiffText(path, oldText, newText) {
+        const o = oldText.split(/\r?\n/), n = newText.split(/\r?\n/);
+        let p = 0;
+        while (p < o.length && p < n.length && o[p] === n[p]) p++;
+        let s = 0;
+        while (s < o.length - p && s < n.length - p && o[o.length - 1 - s] === n[n.length - 1 - s]) s++;
+        const rem = o.slice(p, o.length - s), add = n.slice(p, n.length - s);
+        if (!rem.length && !add.length) return "لا توجد تعديلات غير محفوظة حاليًا.";
+        return [`--- a/${path}`, `+++ b/${path}`, ...rem.map((l) => `- ${l}`), ...add.map((l) => `+ ${l}`)].join("\n");
+      }
+
+      function renderDiff() {
+        if (!state.activeFile) return;
+        const txt = computeDiffText(state.activeFile, state.originalContent, fileEditor.value);
+        diffPreview.textContent = txt;
+      }
+
+      fileEditor.addEventListener("input", renderDiff);
+
+      function renderFileList(filter = "") {
+        const keys = state.folderMode === "real"
+          ? Array.from(state.fileHandles.keys())
+          : Array.from(state.sampleFiles.keys());
+        const filtered = keys.filter((k) => !filter || k.toLowerCase().includes(filter.toLowerCase())).sort();
+        folderTreeEl.innerHTML = "";
+        if (!filtered.length) {
+          folderTreeEl.innerHTML = '<div class="text-slate-500 p-2 text-center" dir="rtl">لا توجد ملفات مطابقة.</div>';
+          return;
+        }
+        filtered.forEach((rel) => {
+          const item = document.createElement("button");
+          item.className = `w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-slate-800 transition flex items-center justify-between ${state.activeFile === rel ? "bg-sky-900/50 text-sky-300 font-bold" : "text-slate-300"}`;
+          item.textContent = rel;
+          item.addEventListener("click", () => openFile(rel));
+          folderTreeEl.appendChild(item);
+        });
+      }
+
+      async function openFile(rel) {
+        try {
+          let content = "";
+          if (state.folderMode === "real") {
+            const fh = state.fileHandles.get(rel);
+            const f = await fh.getFile();
+            content = await f.text();
+          } else {
+            content = state.sampleFiles.get(rel) || "";
+          }
+          state.activeFile = rel;
+          state.originalContent = content;
+          fileEditor.value = content;
+          activeFileLabel.textContent = rel;
+          btnApply.disabled = false;
+          btnSuggest.disabled = false;
+          renderDiff();
+          renderFileList(searchInput.value);
+        } catch (err) {
+          toast("تعذر قراءة الملف: " + err.message, "err");
+        }
+      }
+
+      searchInput.addEventListener("input", () => renderFileList(searchInput.value));
+
+      async function scanRealDir(dirHandle, prefix = "") {
+        const ignore = new Set(["node_modules", ".git", "dist", "build", "__pycache__", ".venv"]);
+        for await (const [name, handle] of dirHandle.entries()) {
+          if (ignore.has(name) || name.startsWith(".")) continue;
+          const rel = prefix ? `${prefix}/${name}` : name;
+          if (handle.kind === "directory") await scanRealDir(handle, rel);
+          else state.fileHandles.set(rel, handle);
+        }
+      }
+
+      document.getElementById("btn-pick-folder").addEventListener("click", async () => {
+        if (typeof window.showDirectoryPicker !== "function") {
+          toast("متصفحك لا يدعم File System Access API هنا — افتح الملف مباشرة في Chrome أو جرّب «مشروع تجريبي».", "warn");
+          return;
+        }
+        try {
+          const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+          state.rootHandle = handle;
+          state.folderMode = "real";
+          state.fileHandles.clear();
+          await scanRealDir(handle);
+          folderBadge.textContent = `${handle.name} (${state.fileHandles.size} ملف)`;
+          folderBadge.className = "text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-900/80 text-emerald-300";
+          renderFileList();
+          if (state.extensionConnected) {
+            bridgeRequest("folderBrainSyncStatus", { connected: true, folderName: handle.name, indexedFileCount: state.fileHandles.size }).catch(() => {});
+          }
+          toast(`تم ربط المجلد الحقيقي "${handle.name}" بنجاح!`, "ok");
+        } catch (err) {
+          toast("تم إلغاء اختيار المجلد أو تعذر الوصول: " + err.message, "warn");
+        }
+      });
+
+      document.getElementById("btn-load-sample-folder").addEventListener("click", () => {
+        state.folderMode = "sample";
+        state.sampleFiles = new Map([
+          ["src/app.ts", "export function greet(name: string) {\n  // Typo in greeting string\n  return 'Helo ' + name;\n}\n"],
+          ["src/config.ts", "export const API_VERSION = '5.1.0';\nexport const ENABLE_WEBMCP = true;\n"],
+          ["README.md", "# Moho AI Sample Project\nReady for Direct Apply testing!\n"],
+        ]);
+        folderBadge.textContent = "مشروع تجريبي (3 ملفات)";
+        folderBadge.className = "text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-900/80 text-amber-300";
+        renderFileList();
+        openFile("src/app.ts");
+        toast("تم تحميل المشروع التجريبي — جرّب «اقتراح إصلاح ذكي» ثم «تطبيق مباشر»!", "ok");
+      });
+
+      btnSuggest.addEventListener("click", () => {
+        if (!state.activeFile) return;
+        const cur = fileEditor.value;
+        if (cur.includes("Helo ")) {
+          fileEditor.value = cur.replace("Helo ", "مرحبا ").replace("// Typo in greeting string", "// Fixed by Moho AI");
+        } else {
+          fileEditor.value = cur + "\n// Updated via Moho Local Folder Brain v7.0.2\n";
+        }
+        renderDiff();
+        toast("تم توليد اقتراح التعديل — راجع الفروقات واضغط «تطبيق مباشر».", "info");
+      });
+
+      // In-page confirmation modal for Direct Apply
+      const modal = document.getElementById("confirm-modal");
+      const modalMsg = document.getElementById("confirm-msg");
+      const modalDiff = document.getElementById("confirm-diff");
+
+      btnApply.addEventListener("click", () => {
+        if (!state.activeFile) return;
+        modalMsg.textContent = `هل تريد حفظ التعديل مباشرة في الملف "${state.activeFile}" (${state.folderMode === "real" ? "على القرص الصلب الحقيقي" : "المشروع التجريبي"})؟`;
+        modalDiff.textContent = computeDiffText(state.activeFile, state.originalContent, fileEditor.value);
+        modal.classList.remove("hidden");
+      });
+
+      document.getElementById("btn-modal-cancel").addEventListener("click", () => modal.classList.add("hidden"));
+      document.getElementById("btn-modal-confirm").addEventListener("click", async () => {
+        modal.classList.add("hidden");
+        const path = state.activeFile;
+        const newContent = fileEditor.value;
+        state.undoStack.push({ path, previousContent: state.originalContent });
+        try {
+          if (state.folderMode === "real") {
+            const fh = state.fileHandles.get(path);
+            const writable = await fh.createWritable();
+            await writable.write(newContent);
+            await writable.close();
+          } else {
+            state.sampleFiles.set(path, newContent);
+          }
+          state.originalContent = newContent;
+          btnUndo.disabled = false;
+          renderDiff();
+          toast(`✅ تم التطبيق المباشر على الملف: ${path}`, "ok");
+        } catch (err) {
+          toast("فشل الحفظ المباشر: " + err.message, "err");
+        }
+      });
+
+      btnUndo.addEventListener("click", async () => {
+        const last = state.undoStack.pop();
+        if (!last) return;
+        try {
+          if (state.folderMode === "real") {
+            const fh = state.fileHandles.get(last.path);
+            const writable = await fh.createWritable();
+            await writable.write(last.previousContent);
+            await writable.close();
+          } else {
+            state.sampleFiles.set(last.path, last.previousContent);
+          }
+          if (state.activeFile === last.path) {
+            state.originalContent = last.previousContent;
+            fileEditor.value = last.previousContent;
+            renderDiff();
+          }
+          btnUndo.disabled = state.undoStack.length === 0;
+          toast(`↩ تم التراجع عن آخر تعديل في ${last.path}`, "info");
+        } catch (err) {
+          toast("فشل التراجع: " + err.message, "err");
+        }
+      });
+
+      document.getElementById("btn-watch-folder").addEventListener("click", async () => {
+        if (state.folderMode !== "real" || !state.rootHandle) {
+          toast("اربط مجلدًا حقيقيًا أولًا لتفعيل مراقبة FileSystemObserver.", "warn");
+          return;
+        }
+        if ("FileSystemObserver" in window) {
+          try {
+            if (state.fsObserver) state.fsObserver.disconnect();
+            state.fsObserver = new window.FileSystemObserver((records) => {
+              toast(`تغيير حي في المجلد (${records.length} حدث)`, "info");
+              scanRealDir(state.rootHandle).then(() => renderFileList(searchInput.value));
+            });
+            await state.fsObserver.observe(state.rootHandle, { recursive: true });
+            toast("تم تفعيل مراقبة المجلد الحية عبر FileSystemObserver!", "ok");
+          } catch (err) { toast(err.message, "err"); }
+        } else {
+          toast("FileSystemObserver غير مفعّل في هذا المتصفح (يمكنك استخدام التحديث اليدوي).", "warn");
+        }
+      });
+
+      // Copy AI Snippet
+      document.getElementById("btn-copy-snippet").addEventListener("click", () => {
+        const text = document.getElementById("ai-snippet").textContent;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(() => toast("تم نسخ كود الربط!", "ok")).catch(() => fallbackCopy(text));
+        } else {
+          fallbackCopy(text);
+        }
+      });
+
+      function fallbackCopy(text) {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+        toast("تم نسخ كود الربط!", "ok");
+      }
+
+      // ============================================================
+      // 7. Sandbox Terminal & Multi-Language Code Runner Handlers
+      // ============================================================
+      const termOut = document.getElementById("term-output");
+      const termWsInput = document.getElementById("term-workspace");
+      const termRuntimesEl = document.getElementById("term-runtimes");
+      const termCmdInput = document.getElementById("term-cmd");
+      const termLangSel = document.getElementById("term-lang");
+      const termCodeArea = document.getElementById("term-code");
+
+      function appendTerm(text) {
+        termOut.textContent += "\n" + text;
+        termOut.scrollTop = termOut.scrollHeight;
+      }
+
+      document.getElementById("btn-term-clear").addEventListener("click", () => {
+        termOut.textContent = "// Terminal cleared.";
+      });
+
+      document.getElementById("btn-term-set-ws").addEventListener("click", async () => {
+        const wsPath = termWsInput.value.trim();
+        if (!wsPath) return toast("أدخل مسار مجلد المشروع أولًا.", "warn");
+        if (state.simulationMode) {
+          appendTerm(`[SIM] Sandbox workspace locked to: ${wsPath}`);
+          toast("تم تعيين مجلد الساندبوكس (محاكاة).", "ok");
+          return;
+        }
+        try {
+          const res = await bridgeRequest("desktopExecute", { action: "terminal_set_workspace", payload: { path: wsPath } });
+          appendTerm(`[OK] Workspace jailed to: ${res.workspaceRoot}`);
+          toast("تم ربط مجلد المشروع بالترمنال المعزول بنجاح!", "ok");
+        } catch (err) {
+          appendTerm(`[ERR] ${err.message}`);
+          toast(err.message, "err");
+        }
+      });
+
+      document.getElementById("btn-term-detect").addEventListener("click", async () => {
+        if (state.simulationMode) {
+          termRuntimesEl.textContent = "python, node, npm, npx, git, powershell (Simulation)";
+          return;
+        }
+        try {
+          const res = await bridgeRequest("desktopExecute", { action: "terminal_detect_runtimes", payload: {} });
+          const names = Object.keys(res.runtimes || {});
+          termRuntimesEl.textContent = names.length ? `المتوفرة: ${names.join(", ")}` : "لم يتم العثور على لغات في PATH";
+          appendTerm(`[RUNTIMES] ${JSON.stringify(res.runtimes, null, 2)}`);
+        } catch (err) {
+          appendTerm(`[ERR] ${err.message}`);
+          toast(err.message, "err");
+        }
+      });
+
+      document.getElementById("btn-term-exec").addEventListener("click", async () => {
+        const cmd = termCmdInput.value.trim();
+        if (!cmd) return;
+        appendTerm(`$ ${cmd}`);
+        if (state.simulationMode) {
+          appendTerm(`[SIM] Executed "${cmd}" (exitCode=0)`);
+          return;
+        }
+        try {
+          const res = await bridgeRequest("desktopExecute", { action: "terminal_exec", payload: { command: cmd, timeoutSec: 30 } }, 35000);
+          appendTerm(`[exit=${res.exitCode} | ${res.durationMs}ms]`);
+        } catch (err) {
+          appendTerm(`[ERR] ${err.message}`);
+          toast(err.message, "err");
+        }
+      });
+
+      document.getElementById("btn-term-run-code").addEventListener("click", async () => {
+        const language = termLangSel.value;
+        const code = termCodeArea.value;
+        appendTerm(`--- Running ${language} snippet ---`);
+        if (state.simulationMode) {
+          appendTerm("مرحبا من Moho Sandbox Terminal v6.0! (Simulation)");
+          return;
+        }
+        try {
+          const res = await bridgeRequest("desktopExecute", { action: "terminal_run_code", payload: { language, code, timeoutSec: 30 } }, 35000);
+          appendTerm(`[exit=${res.exitCode} | ${res.durationMs}ms]`);
+        } catch (err) {
+          appendTerm(`[ERR] ${err.message}`);
+          toast(err.message, "err");
+        }
+      });
+
+      // Initial extension check
+      checkExtensionStatus();
+    })();
+  
+    // --- Smart 1-Click Silent Launch + Single-Click Lock + Auto-Connect & Auto-Stream (v7.0.2) ---
+    let smartLaunchInProgress = false;
+    let smartAutoConnectTimer = null;
+
+    function setSmartLaunchBusy(busy, message) {
+      smartLaunchInProgress = busy;
+      const btnSb = document.getElementById("btn-smart-sandbox");
+      const btnAg = document.getElementById("btn-smart-agent");
+      const hint = document.getElementById("smart-launch-hint");
+      if (btnSb) {
+        btnSb.disabled = busy;
+        btnSb.classList.toggle("opacity-60", busy);
+        btnSb.classList.toggle("cursor-wait", busy);
+        btnSb.textContent = busy ? "⏳ جارٍ التشغيل..." : "🚀 تشغيل الحاسوب المعزول";
+      }
+      if (btnAg) {
+        btnAg.disabled = busy;
+        btnAg.classList.toggle("opacity-60", busy);
+        btnAg.classList.toggle("cursor-wait", busy);
+      }
+      if (hint && message) hint.textContent = message;
+    }
+
+    function startAutoConnectAndStreamLoop(maxAttempts = 20) {
+      if (smartAutoConnectTimer) clearInterval(smartAutoConnectTimer);
+      let attempts = 0;
+      smartAutoConnectTimer = setInterval(async () => {
+        attempts += 1;
+        const btnConn = document.getElementById("btn-desktop-connect");
+        const badge = document.getElementById("desktop-conn-badge");
+        if (badge && badge.textContent && badge.textContent.includes("متصل") && !badge.textContent.includes("غير متصل")) {
+          clearInterval(smartAutoConnectTimer);
+          smartAutoConnectTimer = null;
+          setSmartLaunchBusy(false, "✅ تم التشغيل وبدء البث المباشر تلقائياً!");
+          return;
+        }
+        try {
+          const res = await sendToExtension("desktop_agent_connect", {
+            url: "ws://127.0.0.1:47892",
+            token: (document.getElementById("desktop-token")?.value || "").trim(),
+            startStream: true,
+            fps: Number(document.getElementById("fps-range")?.value || 10),
+          });
+          if (res && (res.connected || res.ok || res.os)) {
+            clearInterval(smartAutoConnectTimer);
+            smartAutoConnectTimer = null;
+            if (btnConn) btnConn.click();
+            setSmartLaunchBusy(false, "✅ تم تشغيل الحاسوب المعزول وبدء البث المباشر تلقائياً!");
+            return;
+          }
+        } catch {}
+        const hint = document.getElementById("smart-launch-hint");
+        if (hint) hint.textContent = `⏳ جارٍ تشغيل الحاسوب المعزول وتجهيز البث المباشر تلقائياً... (${attempts}/${maxAttempts})`;
+        if (attempts >= maxAttempts) {
+          clearInterval(smartAutoConnectTimer);
+          smartAutoConnectTimer = null;
+          setSmartLaunchBusy(false, "⚠️ استغرق الإقلاع وقتاً أطول من المعتاد — يمكنك الضغط على «اتصال + بث مباشر» يدوياً.");
+        }
+      }, 2000);
+    }
+
+    function smartLaunchProtocol(action) {
+      if (action === "open-workspace") {
+        const a = document.createElement("a");
+        a.href = "moho-agent://open-workspace";
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        return;
+      }
+      if (smartLaunchInProgress) return;
+      setSmartLaunchBusy(true, "⏳ جارٍ تشغيل الحاسوب المعزول في الخلفية (لا تضغط مرة أخرى — سيبدأ البث تلقائياً فور الجاهزية)...");
+      const uri = `moho-agent://${action}`;
+      let blurred = false;
+      const onBlur = () => { blurred = true; };
+      window.addEventListener("blur", onBlur, { once: true });
+      const a = document.createElement("a");
+      a.href = uri;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      startAutoConnectAndStreamLoop(20);
+
+      window.setTimeout(() => {
+        window.removeEventListener("blur", onBlur);
+        if (!blurred && smartLaunchInProgress) {
+          const badge = document.getElementById("desktop-conn-badge");
+          if (badge && badge.textContent && badge.textContent.includes("متصل") && !badge.textContent.includes("غير متصل")) return;
+          const dl = document.createElement("a");
+          dl.href = "https://raw.githubusercontent.com/MOHOAI/chromium-web-embed/main/desktop-agent-download/Moho-OneClick-Installer.bat";
+          dl.download = "Moho-OneClick-Installer.bat";
+          dl.style.display = "none";
+          document.body.appendChild(dl);
+          dl.click();
+          dl.remove();
+          const hint = document.getElementById("smart-launch-hint");
+          if (hint) hint.textContent = "⬇️ إذا لم يبدأ التشغيل بعد، افتح Moho-OneClick-Installer.bat الذي تم تحميله مرة واحدة فقط، وسيبدأ البث تلقائياً فور جاهزيته!";
+        }
+      }, 2200);
+    }
+    document.getElementById("btn-smart-sandbox")?.addEventListener("click", () => smartLaunchProtocol("start-sandbox"));
+    document.getElementById("btn-smart-agent")?.addEventListener("click", () => smartLaunchProtocol("start-agent"));
+    document.getElementById("btn-smart-workspace")?.addEventListener("click", () => smartLaunchProtocol("open-workspace"));
+
+  </script>
+</body>
+</html>
