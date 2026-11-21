@@ -15,6 +15,7 @@
 
 import type { WindowsDesktopAgentClient } from "../desktop-agent.js";
 import type { LocalFolderBrain } from "../local-folder-brain.js";
+import type { SandboxTerminalClient } from "../sandbox-terminal.js";
 import { getMcpBrowserTools, handleMcpToolCall, type McpCapableAgent, type McpToolDefinition } from "./mcp.js";
 
 export interface UnifiedToolSpec {
@@ -249,10 +250,78 @@ export function getLocalFolderBrainToolSpecs(): UnifiedToolSpec[] {
   ];
 }
 
+export function getSandboxTerminalToolSpecs(): UnifiedToolSpec[] {
+  return [
+    {
+      name: "terminal_set_workspace",
+      description: "Bind the isolated Windows Sandbox Terminal jail strictly to a local project folder path.",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string", description: "Absolute Windows path to the project folder." } },
+        required: ["path"],
+      },
+    },
+    {
+      name: "terminal_detect_runtimes",
+      description: "Detect installed programming runtimes on Windows (python, node, npm, npx, git, tsc, powershell, gcc, go, rustc, java, php).",
+      parameters: { type: "object", properties: {} },
+    },
+    {
+      name: "terminal_exec",
+      description: "Execute a shell command strictly inside the jailed project folder with Windows Job Object memory/process isolation and timeout.",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string" },
+          cwd: { type: "string", description: "Optional relative subdirectory inside the project folder." },
+          timeoutSec: { type: "number" },
+        },
+        required: ["command"],
+      },
+    },
+    {
+      name: "terminal_run_file",
+      description: "Run a source file (.py, .js, .mjs, .ts, .ps1, .bat, .go, .php) directly inside the jailed project folder.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          args: { type: "array", items: { type: "string" } },
+          timeoutSec: { type: "number" },
+        },
+        required: ["path"],
+      },
+    },
+    {
+      name: "terminal_run_code",
+      description: "Execute an inline code snippet in Python, Node.js/JavaScript, TypeScript, PowerShell, Batch, Go, or PHP inside the jailed project sandbox.",
+      parameters: {
+        type: "object",
+        properties: {
+          language: { type: "string" },
+          code: { type: "string" },
+          timeoutSec: { type: "number" },
+        },
+        required: ["language", "code"],
+      },
+    },
+    {
+      name: "terminal_kill",
+      description: "Terminate a running sandbox terminal job and its entire Windows Job Object process tree.",
+      parameters: {
+        type: "object",
+        properties: { jobId: { type: "string" } },
+        required: ["jobId"],
+      },
+    },
+  ];
+}
+
 export interface UnifiedToolkitSelection {
   browser?: boolean;
   desktop?: boolean;
   localFolder?: boolean;
+  terminal?: boolean;
 }
 
 export function getUnifiedToolSpecs(selection: UnifiedToolkitSelection = { browser: true, desktop: true, localFolder: true }): UnifiedToolSpec[] {
@@ -285,6 +354,9 @@ export function getUnifiedToolSpecs(selection: UnifiedToolkitSelection = { brows
   }
   if (selection.localFolder !== false) {
     specs.push(...getLocalFolderBrainToolSpecs());
+  }
+  if (selection.terminal !== false) {
+    specs.push(...getSandboxTerminalToolSpecs());
   }
   return specs;
 }
@@ -332,6 +404,7 @@ export interface UnifiedAIToolExecutorOptions {
   browserAgent?: McpCapableAgent;
   desktopAgent?: WindowsDesktopAgentClient;
   folderBrain?: LocalFolderBrain;
+  terminal?: SandboxTerminalClient;
 }
 
 /**
@@ -342,11 +415,13 @@ export class UnifiedAIToolExecutor {
   private readonly browserAgent?: McpCapableAgent;
   private readonly desktopAgent?: WindowsDesktopAgentClient;
   private readonly folderBrain?: LocalFolderBrain;
+  private readonly terminal?: SandboxTerminalClient;
 
   constructor(options: UnifiedAIToolExecutorOptions) {
     this.browserAgent = options.browserAgent;
     this.desktopAgent = options.desktopAgent;
     this.folderBrain = options.folderBrain;
+    this.terminal = options.terminal;
   }
 
   async execute(toolName: string, args: Record<string, unknown> = {}): Promise<unknown> {
@@ -463,6 +538,34 @@ export class UnifiedAIToolExecutor {
           return this.folderBrain.undoLastEdit();
         default:
           throw new Error(`Unknown local folder tool: ${toolName}`);
+      }
+    }
+
+    if (toolName.startsWith("terminal_")) {
+      if (!this.terminal) throw new Error("SandboxTerminalClient is not configured.");
+      switch (toolName) {
+        case "terminal_set_workspace":
+          return this.terminal.setWorkspace(String(args.path ?? ""));
+        case "terminal_detect_runtimes":
+          return this.terminal.detectRuntimes();
+        case "terminal_exec":
+          return this.terminal.exec(String(args.command ?? ""), {
+            cwd: args.cwd ? String(args.cwd) : undefined,
+            timeoutSec: typeof args.timeoutSec === "number" ? args.timeoutSec : undefined,
+          });
+        case "terminal_run_file":
+          return this.terminal.runFile(String(args.path ?? ""), {
+            args: Array.isArray(args.args) ? args.args.map(String) : undefined,
+            timeoutSec: typeof args.timeoutSec === "number" ? args.timeoutSec : undefined,
+          });
+        case "terminal_run_code":
+          return this.terminal.runCode(String(args.language ?? "python"), String(args.code ?? ""), {
+            timeoutSec: typeof args.timeoutSec === "number" ? args.timeoutSec : undefined,
+          });
+        case "terminal_kill":
+          return this.terminal.kill(String(args.jobId ?? ""));
+        default:
+          throw new Error(`Unknown terminal tool: ${toolName}`);
       }
     }
 

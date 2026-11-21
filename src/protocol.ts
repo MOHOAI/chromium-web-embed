@@ -171,7 +171,8 @@ export interface BrowserEvent {
     | "desktop.disconnected"
     | "desktop.frame"
     | "desktop.emergency_stop"
-    | "folder_brain.updated";
+    | "folder_brain.updated"
+    | "terminal.output";
   workspaceId: string;
   tabId?: number;
   payload?: Record<string, unknown>;

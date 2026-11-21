@@ -110,6 +110,8 @@ describe("v5.1 protocol, extension & desktop assets", () => {
     expect(existsSync(resolve(root, "desktop-agent/start_agent.bat"))).toBe(true);
     expect(existsSync(resolve(root, "extension/sidepanel.html"))).toBe(true);
     expect(existsSync(resolve(root, "extension/sidepanel.js"))).toBe(true);
+    expect(existsSync(resolve(root, "docs/INDEX.md"))).toBe(true);
+    expect(existsSync(resolve(root, "docs/V6_HIDDEN_DESKTOP_AND_SANDBOX_TERMINAL.md"))).toBe(true);
     expect(typeof isWebMCPSupported()).toBe("boolean");
   });
 });
@@ -173,6 +175,9 @@ describe("Unified AI Platform Toolkit v5.1 (Gemini / Claude / OpenAI / MCP / Web
     expect(claude.some((t) => t.name === "browser_annotated_screenshot")).toBe(true);
     expect(openai.some((t) => t.function.name === "desktop_inspect_controls")).toBe(true);
     expect(mcp.some((t) => t.name === "fs_search_replace_patch")).toBe(true);
+    expect(gemini.some((t) => t.name === "terminal_exec")).toBe(true);
+    expect(claude.some((t) => t.name === "terminal_run_code")).toBe(true);
+    expect(openai.some((t) => t.function.name === "terminal_run_file")).toBe(true);
 
     const mock = createMockDirectory({ "index.ts": "const x = 1;\n" });
     const brain = new LocalFolderBrain();

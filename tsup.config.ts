@@ -10,6 +10,7 @@ export default defineConfig({
     "desktop-agent": "src/desktop-agent.ts",
     "local-folder-brain": "src/local-folder-brain.ts",
     webmcp: "src/webmcp.ts",
+    "sandbox-terminal": "src/sandbox-terminal.ts",
   },
   format: ["esm", "cjs"],
   dts: true,

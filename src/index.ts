@@ -33,6 +33,7 @@ export * from "./agent-runner.js";
 export * from "./desktop-agent.js";
 export * from "./local-folder-brain.js";
 export * from "./webmcp.js";
+export * from "./sandbox-terminal.js";
 
 export interface RealBrowserClientOptions {
   timeoutMs?: number;

@@ -1,5 +1,5 @@
 const BRIDGE_CHANNEL = "real-browser-web/v5";
-const EXTENSION_VERSION = "5.1.2";
+const EXTENSION_VERSION = "6.0.0";
 const STORAGE_KEY = "managedBrowserWorkspaces";
 const DEFAULT_DESKTOP_URL = "ws://127.0.0.1:47892";
 
@@ -98,6 +98,15 @@ function desktopConnect(url = DEFAULT_DESKTOP_URL, token = "") {
           broadcastEvent({
             type: "desktop.frame",
             workspaceId: "desktop",
+            payload: msg.data,
+            timestamp: Date.now(),
+          });
+          return;
+        }
+        if (msg.event === "terminal.output" && msg.data) {
+          broadcastEvent({
+            type: "terminal.output",
+            workspaceId: "terminal",
             payload: msg.data,
             timestamp: Date.now(),
           });
@@ -475,8 +484,36 @@ async function dispatchKey(tabId, type, rawKey, modifiersMask = 0) {
 
 async function captureTabScreenshot(tabId, options = {}) {
   const tab = await chrome.tabs.get(tabId);
-  const metrics = await getViewportMetrics(tabId);
   const format = options.format === "jpeg" ? "jpeg" : "png";
+  const mimeType = format === "jpeg" ? "image/jpeg" : "image/png";
+
+  // Fast path: if tab is active in its dedicated window and no clip is requested, captureVisibleTab is ultra-reliable
+  if (!options.clip && tab.active && typeof tab.windowId === "number") {
+    try {
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
+        format,
+        ...(format === "jpeg" ? { quality: options.quality || 72 } : {}),
+      });
+      if (dataUrl && dataUrl.startsWith("data:image/")) {
+        const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+        return {
+          tabId,
+          url: tab.url || "",
+          title: tab.title || "",
+          format,
+          mimeType,
+          base64,
+          dataUrl,
+          width: tab.width || 1280,
+          height: tab.height || 800,
+          devicePixelRatio: 1,
+          capturedAt: Date.now(),
+        };
+      }
+    } catch {}
+  }
+
+  const metrics = await getViewportMetrics(tabId);
   const params = {
     format,
     fromSurface: true,
@@ -484,7 +521,6 @@ async function captureTabScreenshot(tabId, options = {}) {
     ...(options.clip ? { clip: options.clip } : {}),
   };
   const res = await cdpSend(tabId, "Page.captureScreenshot", params);
-  const mimeType = format === "jpeg" ? "image/jpeg" : "image/png";
   return {
     tabId,
     url: tab.url || "",
@@ -927,6 +963,8 @@ async function handleBridgeCommand(command, sender) {
           "console-network-diagnostics",
           "side-panel",
           "webmcp",
+          "hidden-win32-desktop",
+          "sandbox-terminal",
           "zoom-screenshot",
         ],
       };
@@ -937,8 +975,21 @@ async function handleBridgeCommand(command, sender) {
 
     case "workspaceCreate": {
       if (!origin) throw new Error("Cannot create workspace from non-HTTP(S) origin");
-      const url = payload.url && safeOrigin(payload.url) ? payload.url : "about:blank";
-      const tab = await chrome.tabs.create({ url, active: true });
+      const url = payload.url && safeOrigin(payload.url) ? payload.url : "https://example.com";
+      let tab;
+      if (payload.inNewWindow !== false) {
+        const win = await chrome.windows.create({
+          url,
+          focused: false,
+          width: 1280,
+          height: 800,
+          type: "normal",
+        });
+        tab = win.tabs && win.tabs[0];
+      }
+      if (!tab) {
+        tab = await chrome.tabs.create({ url, active: false });
+      }
       const groupId = await chrome.tabs.group({ tabIds: [tab.id] });
       const label = String(payload.label || "AI Workspace");
       await chrome.tabGroups.update(groupId, { title: label, color: "blue" });
