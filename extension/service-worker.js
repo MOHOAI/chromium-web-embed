@@ -1,5 +1,5 @@
 const BRIDGE_CHANNEL = "real-browser-web/v5";
-const EXTENSION_VERSION = "6.0.0";
+const EXTENSION_VERSION = "6.0.1";
 const STORAGE_KEY = "managedBrowserWorkspaces";
 const DEFAULT_DESKTOP_URL = "ws://127.0.0.1:47892";
 

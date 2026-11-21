@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-AGENT_VERSION = "6.0.0"
+AGENT_VERSION = "6.0.1"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 47892
 MIN_WIN10_BUILD = 10240
@@ -332,12 +332,14 @@ class HiddenDesktopEngine:
             ok, val = ready_q.get(timeout=5.0)
             if not ok:
                 raise val
-            # Launch a lightweight starter app (Notepad or user-specified app) inside the hidden desktop
-            starter = launch_app or "notepad.exe"
-            try:
-                self.launch_app_on_hidden_desktop(starter, launch_args or [])
-            except Exception:
-                pass
+            # Launch real Windows Shell (explorer.exe) so the hidden desktop shows a real clean Windows desktop + taskbar!
+            # Pass launchApp="none" for a completely empty blank desktop.
+            if launch_app != "none":
+                starter = launch_app or "explorer.exe"
+                try:
+                    self.launch_app_on_hidden_desktop(starter, launch_args or [])
+                except Exception:
+                    pass
         elif launch_app:
             self.launch_app_on_hidden_desktop(launch_app, launch_args or [])
 
@@ -896,6 +898,18 @@ class MohoDesktopAgentServer:
 
         if action == "list_windows":
             return {"windows": d.list_windows()}
+
+        if action == "switch_virtual_desktop":
+            return {
+                "ok": True,
+                "mode": "hidden_win32_desktop",
+                "desktopName": d.desktop_name,
+                "note": "Hidden isolated desktop runs in background; your primary Windows screen stays untouched.",
+            }
+
+        if action == "inspect_window_controls":
+            wins = d.list_windows()
+            return {"hwnd": wins[0]["hwnd"] if wins else 0, "windows": wins, "controls": wins[: int(payload.get("maxControls", 60))]}
 
         if action == "start_stream":
             if not d.active:
