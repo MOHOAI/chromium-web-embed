@@ -206,6 +206,30 @@ export function getDesktopToolSpecs(): UnifiedToolSpec[] {
       description: "Capture both a live screenshot and the structured list of all visible windows + cursor coordinates inside the hidden desktop in one call.",
       parameters: { type: "object", properties: {} },
     },
+    {
+      name: "desktop_open_start_menu",
+      description: "Open the Windows 10/11 Start Menu inside the hidden isolated desktop.",
+      parameters: { type: "object", properties: {} },
+    },
+    {
+      name: "desktop_show_desktop",
+      description: "Minimize all windows inside the hidden isolated desktop to reveal desktop icons.",
+      parameters: { type: "object", properties: {} },
+    },
+    {
+      name: "desktop_clipboard_get",
+      description: "Read the current UTF-8 text from the Windows clipboard.",
+      parameters: { type: "object", properties: {} },
+    },
+    {
+      name: "desktop_clipboard_set",
+      description: "Write UTF-8 text to the Windows clipboard.",
+      parameters: {
+        type: "object",
+        properties: { text: { type: "string" } },
+        required: ["text"],
+      },
+    },
   ];
 }
 
@@ -540,6 +564,14 @@ export class UnifiedAIToolExecutor {
           return this.desktopAgent.executeComputerAction({ type: "window_action", ...args });
         case "desktop_observe_rich":
           return this.desktopAgent.executeComputerAction({ type: "observe_rich" });
+        case "desktop_open_start_menu":
+          return this.desktopAgent.executeComputerAction({ type: "open_start_menu" });
+        case "desktop_show_desktop":
+          return this.desktopAgent.executeComputerAction({ type: "show_desktop" });
+        case "desktop_clipboard_get":
+          return this.desktopAgent.clipboardGet();
+        case "desktop_clipboard_set":
+          return this.desktopAgent.clipboardSet(String(args.text ?? ""));
         case "desktop_focus_window":
           return this.desktopAgent.focusWindow({
             titleContains: args.titleContains ? String(args.titleContains) : undefined,
@@ -619,4 +651,50 @@ export function createUnifiedAIToolExecutor(
   options: UnifiedAIToolExecutorOptions
 ): UnifiedAIToolExecutor {
   return new UnifiedAIToolExecutor(options);
+}
+
+
+/**
+ * Generates a universal system prompt enabling ANY LLM/VLM — including custom,
+ * open-source, or local models without native function calling (e.g. MOHO AI,
+ * Llama, Qwen, DeepSeek, Mistral) — to invoke all chromium-web-embed tools.
+ */
+export function toUniversalSystemPrompt(selection?: UnifiedToolkitSelection): string {
+  const specs = getUnifiedToolSpecs(selection);
+  const lines = [
+    "You have access to the chromium-web-embed v6.2.0 runtime (Browser, Hidden Windows 10/11 Desktop, Local Folder Brain, and Sandboxed Terminal).",
+    "To call a tool, emit one or more blocks in this exact XML+JSON format:",
+    '<tool_call>{"name": "tool_name", "arguments": {"param": "value"}}</tool_call>',
+    "",
+    "Available tools:",
+  ];
+  for (const s of specs) {
+    lines.push(`- ${s.name}: ${s.description} | params=${JSON.stringify(s.parameters.properties)}`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Parses `<tool_call>{...}</tool_call>` blocks emitted by any custom/unsupported LLM.
+ */
+export function parseUniversalToolCalls(
+  rawText: string
+): Array<{ name: string; arguments: Record<string, unknown> }> {
+  const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+  const regex = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(rawText)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1]) as { name?: string; arguments?: Record<string, unknown> };
+      if (typeof parsed.name === "string" && parsed.name.trim()) {
+        calls.push({
+          name: parsed.name.trim(),
+          arguments: parsed.arguments && typeof parsed.arguments === "object" ? parsed.arguments : {},
+        });
+      }
+    } catch {
+      // skip malformed JSON block
+    }
+  }
+  return calls;
 }

@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-AGENT_VERSION = "6.1.0"
+AGENT_VERSION = "6.2.0"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 47892
 MIN_WIN10_BUILD = 10240
@@ -139,6 +139,15 @@ if sys.platform == "win32":
     HTMINBUTTON = 8
     HTMAXBUTTON = 9
     HTCLOSE = 20
+    HTBOTTOMRIGHT = 17
+    SC_TASKLIST = 0xF130
+    WM_XBUTTONDOWN = 0x020B
+    WM_XBUTTONUP = 0x020C
+    WM_CUT = 0x0300
+    WM_COPY = 0x0301
+    WM_PASTE = 0x0302
+    WM_UNDO = 0x0304
+    EM_SETSEL = 0x00B1
     SWP_NOSIZE = 0x0001
     SWP_NOZORDER = 0x0004
     SW_MINIMIZE = 6
@@ -264,6 +273,10 @@ if sys.platform == "win32":
     user32.SetWindowPos.restype = wintypes.BOOL
     user32.IsZoomed.argtypes = [wintypes.HWND]
     user32.IsZoomed.restype = wintypes.BOOL
+    user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+    user32.FindWindowW.restype = wintypes.HWND
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetClassNameW.restype = ctypes.c_int
 
     VK_MAP: Dict[str, int] = {
         "backspace": 0x08, "tab": 0x09, "enter": 0x0D, "return": 0x0D,
@@ -633,6 +646,11 @@ class HiddenDesktopEngine:
             elif action == "mouse_up":
                 msg = WM_RBUTTONUP if button == "right" else WM_MBUTTONUP if button == "middle" else WM_LBUTTONUP
                 user32.PostMessageW(hwnd, msg, 0, lp)
+            elif action in ("x1_click", "x2_click"):
+                xb = 1 if action == "x1_click" else 2
+                wp = (xb << 16)
+                user32.PostMessageW(hwnd, WM_XBUTTONDOWN, wp, lp)
+                user32.PostMessageW(hwnd, WM_XBUTTONUP, wp, lp)
             elif action in ("click", "double_click", "triple_click", "right_click", "middle_click"):
                 b = "right" if action == "right_click" else "middle" if action == "middle_click" else button
                 down = WM_RBUTTONDOWN if b == "right" else WM_MBUTTONDOWN if b == "middle" else WM_LBUTTONDOWN
@@ -646,6 +664,13 @@ class HiddenDesktopEngine:
                     else:
                         user32.PostMessageW(hwnd, down, mk, lp)
                     user32.PostMessageW(hwnd, up, 0, lp)
+                # If double-clicking a desktop icon (SysListView32), also send Enter to reliably launch the item
+                if action == "double_click":
+                    cls_buf = ctypes.create_unicode_buffer(64)
+                    user32.GetClassNameW(hwnd, cls_buf, 64)
+                    if cls_buf.value.lower() == "syslistview32":
+                        user32.PostMessageW(hwnd, WM_KEYDOWN, 0x0D, 1 | (0x1C << 16))
+                        user32.PostMessageW(hwnd, WM_KEYUP, 0x0D, 1 | (0x1C << 16) | (1 << 30) | (1 << 31))
             elif action == "scroll":
                 if delta_y:
                     wp = ((-int(delta_y)) & 0xFFFF) << 16
@@ -738,6 +763,98 @@ class HiddenDesktopEngine:
                 user32.SetWindowPos(target, 0, int(x), int(y), int(width), int(height), SWP_NOZORDER)
             return {"ok": True, "hwnd": int(target), "op": op}
         return self._run_on_desktop_thread(_do)
+
+    def open_start_menu(self) -> Dict[str, Any]:
+        def _do():
+            tray = user32.FindWindowW("Shell_TrayWnd", None)
+            if tray:
+                user32.PostMessageW(tray, WM_SYSCOMMAND, SC_TASKLIST, 0)
+                return {"ok": True, "trayHwnd": int(tray)}
+            return {"ok": False, "error": "Shell_TrayWnd not found on hidden desktop."}
+        return self._run_on_desktop_thread(_do)
+
+    def show_desktop(self) -> Dict[str, Any]:
+        def _do():
+            wins = self._enum_desktop_windows_internal()
+            minimized = 0
+            for w in wins:
+                cls_buf = ctypes.create_unicode_buffer(64)
+                user32.GetClassNameW(w["hwnd"], cls_buf, 64)
+                if cls_buf.value not in ("Shell_TrayWnd", "Progman", "WorkerW"):
+                    user32.ShowWindow(w["hwnd"], SW_MINIMIZE)
+                    minimized += 1
+            return {"ok": True, "minimizedCount": minimized}
+        return self._run_on_desktop_thread(_do)
+
+    def dispatch_hotkey(self, keys: List[str]) -> Dict[str, Any]:
+        norm = [k.strip().lower() for k in keys if k]
+        if not norm:
+            return {"ok": False, "error": "Empty hotkey"}
+        if norm == ["win"] or norm == ["meta"] or norm == ["super"]:
+            return self.open_start_menu()
+        if set(norm) == {"win", "d"}:
+            return self.show_desktop()
+        if set(norm) == {"win", "r"}:
+            return self.launch_app_on_hidden_desktop("cmd.exe", [])
+        if set(norm) == {"alt", "f4"}:
+            return self.window_action("close")
+
+        def _do():
+            hwnd = self._focused_hwnd
+            if not hwnd:
+                wins = self._enum_desktop_windows_internal()
+                if wins:
+                    hwnd = wins[0]["hwnd"]
+            if not hwnd:
+                return {"ok": False, "error": "No focused window on hidden desktop."}
+            if "ctrl" in norm or "control" in norm:
+                main = norm[-1]
+                if main == "c": user32.PostMessageW(hwnd, WM_COPY, 0, 0); return {"ok": True, "msg": "WM_COPY"}
+                if main == "v": user32.PostMessageW(hwnd, WM_PASTE, 0, 0); return {"ok": True, "msg": "WM_PASTE"}
+                if main == "x": user32.PostMessageW(hwnd, WM_CUT, 0, 0); return {"ok": True, "msg": "WM_CUT"}
+                if main == "z": user32.PostMessageW(hwnd, WM_UNDO, 0, 0); return {"ok": True, "msg": "WM_UNDO"}
+                if main == "a": user32.PostMessageW(hwnd, EM_SETSEL, 0, -1); return {"ok": True, "msg": "EM_SETSEL"}
+            return self.dispatch_key(norm[-1])
+
+        return self._run_on_desktop_thread(_do)
+
+    def clipboard_get(self) -> str:
+        if sys.platform != "win32":
+            return ""
+        CF_UNICODETEXT = 13
+        if not user32.OpenClipboard(0):
+            return ""
+        try:
+            handle = user32.GetClipboardData(CF_UNICODETEXT)
+            if not handle:
+                return ""
+            ptr = kernel32.GlobalLock(handle)
+            if not ptr:
+                return ""
+            try:
+                return ctypes.wstring_at(ptr)
+            finally:
+                kernel32.GlobalUnlock(handle)
+        finally:
+            user32.CloseClipboard()
+
+    def clipboard_set(self, text: str) -> None:
+        if sys.platform != "win32":
+            return
+        CF_UNICODETEXT = 13
+        GMEM_MOVEABLE = 0x0002
+        data = (text + "\x00").encode("utf-16-le")
+        if not user32.OpenClipboard(0):
+            raise RuntimeError("Failed to open clipboard.")
+        try:
+            user32.EmptyClipboard()
+            hmem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+            ptr = kernel32.GlobalLock(hmem)
+            ctypes.memmove(ptr, data, len(data))
+            kernel32.GlobalUnlock(hmem)
+            user32.SetClipboardData(CF_UNICODETEXT, hmem)
+        finally:
+            user32.CloseClipboard()
 
 
 # ---------------------------------------------------------------------------
@@ -1054,7 +1171,7 @@ class MohoDesktopAgentServer:
                 d.capture_frame, str(payload.get("format", "png")), int(payload.get("quality", 85)), payload.get("maxWidth")
             )
 
-        if action in ("move", "click", "double_click", "triple_click", "right_click", "middle_click", "mouse_down", "mouse_up", "scroll"):
+        if action in ("move", "click", "double_click", "triple_click", "right_click", "middle_click", "x1_click", "x2_click", "mouse_down", "mouse_up", "scroll"):
             x, y = d.resolve_coords(payload.get("x"), payload.get("y"), space)
             dx = int(payload.get("deltaX", 0))
             dy = int(payload.get("deltaY", 0))
@@ -1090,7 +1207,41 @@ class MohoDesktopAgentServer:
 
         if action == "hotkey":
             keys = [str(k) for k in (payload.get("keys") or [])]
-            return d.dispatch_key(keys[-1] if keys else "Enter")
+            return d.dispatch_hotkey(keys)
+
+        if action == "long_press":
+            x, y = d.resolve_coords(payload.get("x"), payload.get("y"), space)
+            d.dispatch_mouse("mouse_down", x, y, button=str(payload.get("button", "left")))
+            await asyncio.sleep(max(0.15, min(10.0, float(payload.get("seconds", 1.2)))))
+            return d.dispatch_mouse("mouse_up", x, y, button=str(payload.get("button", "left")))
+
+        if action in ("key_down", "key_up", "hold_key"):
+            return d.dispatch_key(str(payload.get("key", "Enter")))
+
+        if action == "open_start_menu":
+            return d.open_start_menu()
+
+        if action == "show_desktop":
+            return d.show_desktop()
+
+        if action == "clipboard_get":
+            return {"text": d.clipboard_get()}
+
+        if action == "clipboard_set":
+            d.clipboard_set(str(payload.get("text", "")))
+            return {"ok": True}
+
+        if action == "zoom":
+            full = await asyncio.to_thread(d.capture_frame, "png", 90, None)
+            reg = payload.get("region") or [0, 0, 400, 300]
+            x0, y0 = d.resolve_coords(reg[0], reg[1], space)
+            x1, y1 = d.resolve_coords(reg[2], reg[3], space)
+            img = d._Image.open(io.BytesIO(base64.b64decode(full["base64"])))
+            crop = img.crop((min(x0, x1), min(y0, y1), max(x0 + 10, x1), max(y0 + 10, y1)))
+            buf = io.BytesIO()
+            crop.save(buf, format="PNG")
+            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            return {"format": "png", "mimeType": "image/png", "base64": b64, "dataUrl": f"data:image/png;base64,{b64}", "width": crop.size[0], "height": crop.size[1], "screenWidth": d.width, "screenHeight": d.height, "capturedAt": int(time.time() * 1000)}
 
         # --- Isolated Sandbox Terminal & Code Execution Actions ---
         async def _stream_out(stream_name: str, line: str):

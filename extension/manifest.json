@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "116",
   "name": "Moho Browser Workspace",
-  "version": "6.1.0",
+  "version": "6.2.0",
   "description": "Isolated Chromium workspace bridge, Chrome Side Panel, WebMCP, Set-of-Mark & ARIA snapshots, Windows 10/11 Virtual Desktop Computer-Use broker with live preview, Local Folder Brain, and multi-provider AI agents (Gemini, Claude, OpenAI/ChatGPT, MOHO AI).",
   "permissions": [
     "tabs",

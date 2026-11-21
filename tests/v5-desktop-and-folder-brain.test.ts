@@ -16,6 +16,8 @@ import {
   toMcpTools,
   toOpenAITools,
   UnifiedAIToolExecutor,
+  toUniversalSystemPrompt,
+  parseUniversalToolCalls,
 } from "../src/providers/ai-toolkit.js";
 import { isWebMCPSupported } from "../src/webmcp.js";
 
@@ -191,5 +193,18 @@ describe("Unified AI Platform Toolkit v5.1 (Gemini / Claude / OpenAI / MCP / Web
     })) as { applied: boolean };
     expect(res.applied).toBe(true);
     expect(mock.store.get("index.ts")).toBe("const x = 42;\n");
+  });
+});
+
+describe("Universal AI Agent Support (v6.2.0 custom/unsupported models)", () => {
+  it("generates universal system prompt and parses <tool_call> blocks cleanly", () => {
+    const prompt = toUniversalSystemPrompt();
+    expect(prompt).toContain("desktop_open_start_menu");
+    expect(prompt).toContain("terminal_run_code");
+    const parsed = parseUniversalToolCalls(
+      'Thinking... <tool_call>{"name": "desktop_open_start_menu", "arguments": {}}</tool_call>'
+    );
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].name).toBe("desktop_open_start_menu");
   });
 });
