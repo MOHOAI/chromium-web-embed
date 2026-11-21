@@ -136,6 +136,7 @@ desktopConnectBtn.addEventListener("click", async () => {
     const res = await sendPopupMessage("desktop-connect", { token });
     if (!res.ok) {
       desktopDetailEl.textContent = `تعذر الاتصال: ${res.error || "تأكد من تشغيل الوسيط"}`;
+      return;
     }
   }
   await refreshDesktop();

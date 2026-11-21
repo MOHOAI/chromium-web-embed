@@ -118,6 +118,7 @@ export class RealBrowserClient {
         }
         return;
       }
+      if (typeof msg.ok !== "boolean") return;
       if (typeof msg.id === "string" && this.pending.has(msg.id)) {
         const entry = this.pending.get(msg.id)!;
         this.pending.delete(msg.id);

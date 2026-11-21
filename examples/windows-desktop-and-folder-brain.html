@@ -145,6 +145,7 @@
         previewImg.src = lastFrame.dataUrl;
         return;
       }
+      if (typeof ev.data.ok !== "boolean") return;
       if (ev.data.id && pending.has(ev.data.id)) {
         const p = pending.get(ev.data.id);
         pending.delete(ev.data.id);
